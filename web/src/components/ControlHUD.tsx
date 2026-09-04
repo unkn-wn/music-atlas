@@ -1,29 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sliders, Layers, Activity, ChevronDown, X } from 'lucide-react';
+import { Layers, ChevronDown } from 'lucide-react';
 import { Continent } from '../types/atlas';
 
 interface ControlHUDProps {
-  threshold: number;
-  onThresholdChange: (val: number) => void;
   continents: Continent[];
   selectedContinentId: number | null;
   onSelectContinent: (id: number | null) => void;
-  sizeMode: 'popularity' | 'degree';
-  onToggleSizeMode: () => void;
-  visibleEdgeCount: number;
-  totalEdgeCount: number;
 }
 
 export const ControlHUD: React.FC<ControlHUDProps> = ({
-  threshold,
-  onThresholdChange,
   continents,
   selectedContinentId,
-  onSelectContinent,
-  sizeMode,
-  onToggleSizeMode,
-  visibleEdgeCount,
-  totalEdgeCount
+  onSelectContinent
 }) => {
   const [showContinents, setShowContinents] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -42,38 +30,6 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
 
   return (
     <div className="relative pointer-events-auto flex items-center gap-2.5" ref={popoverRef}>
-      {/* Compact Threshold Slider Pill */}
-      <div className="glass-panel px-3.5 py-2 flex items-center gap-3 shadow-xl">
-        <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium shrink-0">
-          <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="hidden sm:inline">Lines:</span>
-          <span className="font-mono text-cyan-400 font-bold bg-cyan-950/40 px-1.5 py-0.5 rounded border border-cyan-800/50 text-[11px]">
-            {threshold.toFixed(2)}
-          </span>
-        </div>
-
-        <input
-          type="range"
-          min="0.0"
-          max="0.80"
-          step="0.01"
-          value={threshold}
-          onChange={(e) => onThresholdChange(parseFloat(e.target.value))}
-          className="w-20 sm:w-28 cursor-pointer"
-          title={`Filter threshold (${visibleEdgeCount} / ${totalEdgeCount} visible lines)`}
-        />
-      </div>
-
-      {/* Sizing Toggle Pill */}
-      <button
-        onClick={onToggleSizeMode}
-        className="glass-panel px-3 py-2 flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white hover:bg-white/10 transition-colors shadow-xl shrink-0"
-        title="Toggle node circle size metric"
-      >
-        <Activity className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-        <span className="hidden md:inline">Size:</span>
-        <strong className="text-white capitalize">{sizeMode === 'popularity' ? 'Pop' : 'Degree'}</strong>
-      </button>
 
       {/* Continents Filter Button */}
       <button

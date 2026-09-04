@@ -14,9 +14,7 @@ export const App: React.FC = () => {
 
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
-  const [threshold, setThreshold] = useState<number>(0.06);
   const [selectedContinentId, setSelectedContinentId] = useState<number | null>(null);
-  const [sizeMode, setSizeMode] = useState<'popularity' | 'degree'>('popularity');
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
@@ -29,12 +27,6 @@ export const App: React.FC = () => {
 
   // Drawer artist bound strictly to deliberate selection
   const drawerArtist = selectedArtist;
-
-  // Calculate visible edges count based on threshold
-  const visibleEdgeCount = useMemo(() => {
-    if (!data) return 0;
-    return data.edges.filter((e) => e.weight >= threshold).length;
-  }, [data, threshold]);
 
   // Handlers
   const handleSelectArtist = (id: string | null) => {
@@ -59,7 +51,7 @@ export const App: React.FC = () => {
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center">
           <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing 550+ artists across 11,000+ bridges...</p>
+          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing 550+ artists across bridges...</p>
         </div>
       </div>
     );
@@ -84,9 +76,7 @@ export const App: React.FC = () => {
         graph={graph}
         selectedNodeId={selectedArtistId}
         onSelectNode={handleSelectArtist}
-        threshold={threshold}
         selectedContinentId={selectedContinentId}
-        sizeMode={sizeMode}
       />
 
       {/* Sleek Floating Top Navigation Island */}
@@ -101,7 +91,7 @@ export const App: React.FC = () => {
               MUSIC ATLAS
             </span>
             <span className="hidden lg:inline-block text-[11px] font-mono text-slate-400">
-              {data.metadata.nodeCount} artists &bull; {visibleEdgeCount.toLocaleString()} bridges
+              {data.metadata.nodeCount} artists &bull; {data.metadata.edgeCount.toLocaleString()} bridges
             </span>
           </div>
         </div>
@@ -118,15 +108,9 @@ export const App: React.FC = () => {
         {/* Minimal Control HUD */}
         <div className="pointer-events-auto flex items-center gap-2">
           <ControlHUD
-            threshold={threshold}
-            onThresholdChange={setThreshold}
             continents={data.continents}
             selectedContinentId={selectedContinentId}
             onSelectContinent={setSelectedContinentId}
-            sizeMode={sizeMode}
-            onToggleSizeMode={() => setSizeMode(sizeMode === 'popularity' ? 'degree' : 'popularity')}
-            visibleEdgeCount={visibleEdgeCount}
-            totalEdgeCount={data.metadata.edgeCount}
           />
 
           <button
@@ -210,10 +194,9 @@ export const App: React.FC = () => {
               <strong>Music Atlas</strong> is a 2D spatial network visualization of the global music streaming landscape, modeled directly after the iconic <strong>Twitch Atlas</strong>.
             </p>
             <ul className="text-xs text-slate-300 space-y-2 mb-6 list-disc pl-4 font-normal">
-              <li><strong>Constellations (Nodes):</strong> 550+ landmark artists sized by popularity reach with steep power-law scaling.</li>
-              <li><strong>Interconnected Web (Edges):</strong> 11,000+ listener crossover bridges connecting genres and communities into one continuous galaxy.</li>
-              <li><strong>Threshold Slider:</strong> Dynamically filter fine ethereal filaments vs core bridges in real time.</li>
-              <li><strong>Focus Mode:</strong> Clicking any artist illuminates their direct neighborhood and displays shared playlist crossover percentages.</li>
+              <li><strong>Constellations (Nodes):</strong> 550+ landmark artists sized strictly proportional to follower reach across the galaxy.</li>
+              <li><strong>Spiderweb Filaments (Edges):</strong> Inward-curved crossover bridges connecting genres and communities into an interconnected web.</li>
+              <li><strong>Focus Mode:</strong> Clicking any artist illuminates their direct neighborhood in genre color with shared playlist crossover percentages.</li>
               <li><strong>Audio Discovery:</strong> 30-second streaming audio previews powered by live iTunes search integration.</li>
             </ul>
             <button

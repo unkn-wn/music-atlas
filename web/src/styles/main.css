@@ -360,3 +360,10 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .eq-bar:nth-child(1) { animation-delay: 0.1s; }
 .eq-bar:nth-child(2) { animation-delay: 0.3s; }
 .eq-bar:nth-child(3) { animation-delay: 0.5s; }
+
+/* Sigma Canvas Layering: ensure hover WebGL fill sits behind 2D labels and hovers avatars */
+.sigma-hoverNodes { z-index: 1; }
+.sigma-labels { z-index: 2; }
+.sigma-hovers { z-index: 3; }
+.sigma-mouse { z-index: 4; }
+

@@ -23,15 +23,14 @@ export function useGraphData() {
         // Instantiate in-memory Graphology graph
         const g = new Graph({ type: 'undirected', multi: false });
 
-        // Add nodes
+        // Add nodes (defaulting to circle so images are lazily loaded by zoom tier in nodeReducer)
         bundle.nodes.forEach((node) => {
-          const hasValidImage = Boolean(node.image && !node.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
-          const nodeType = hasValidImage ? 'image' : 'circle';
           g.addNode(node.id, {
             ...node,
-            type: nodeType,
+            type: 'circle',
             originalSize: node.size,
-            originalColor: node.color
+            originalColor: node.color,
+            originalLabel: node.label
           });
         });
 
@@ -43,7 +42,7 @@ export function useGraphData() {
               g.addEdge(edge.source, edge.target, {
                 ...edge,
                 type: 'curve',
-                curvature: typeof edge.curvature === 'number' ? edge.curvature : 0.14,
+                curvature: typeof edge.curvature === 'number' ? edge.curvature : -0.14,
                 originalSize: edge.size
               });
             }

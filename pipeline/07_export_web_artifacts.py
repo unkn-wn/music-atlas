@@ -67,8 +67,15 @@ def main():
 
     import math
 
-    # Top 40 global headliners for prominent labels and badges at macro view
-    sorted_artists = sorted(hydrated.values(), key=lambda a: (a.get("popularity", 0) * 1000000 + a.get("followers", 0)), reverse=True)
+    all_followers = [max(0, meta.get("followers") or 0) for meta in hydrated.values()]
+    min_f = min(all_followers) if all_followers else 0
+    max_f = max(all_followers) if all_followers else 1
+    sqrt_min = math.sqrt(min_f)
+    sqrt_max = math.sqrt(max_f)
+    sqrt_diff = sqrt_max - sqrt_min
+
+    # Top 40 global headliners by followers for prominent labels and badges at macro view
+    sorted_artists = sorted(hydrated.values(), key=lambda a: (a.get("followers") or 0), reverse=True)
     headliner_ids = {a["id"] for a in sorted_artists[:40] if a.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in a.get("image", "")}
 
     # Build node list
@@ -82,9 +89,11 @@ def main():
         })
 
         pop = meta.get("popularity", 75)
-        # Steep power-law sizing: 2.0px (starlike) to 28.0px (anchor superstar)
-        pop_ratio = max(0.0, min(1.0, (pop - 40.0) / 60.0))
-        size = round(2.0 + (pop_ratio ** 2.6) * 26.0, 1)
+        followers = max(0, meta.get("followers") or 0)
+        # Sizing strictly proportional to followers: 2.5px (indie/emerging) to 28.0px (global superstar)
+        ratio = (math.sqrt(followers) - sqrt_min) / sqrt_diff if sqrt_diff > 0 else 0.5
+        ratio = max(0.0, min(1.0, ratio))
+        size = round(2.5 + ratio * 25.5, 1)
 
         has_valid_image = bool(meta.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in meta.get("image", ""))
         is_headliner = a_id in headliner_ids
@@ -102,7 +111,7 @@ def main():
             "continentId": comm_info["continentId"],
             "continentName": comm_info["continentName"],
             "popularity": pop,
-            "followers": meta.get("followers", 1000000),
+            "followers": followers,
             "image": meta.get("image", ""),
             "previewUrl": meta.get("previewUrl", ""),
             "topTrack": meta.get("topTrack", ""),
@@ -113,7 +122,7 @@ def main():
             "topCrossovers": neighbors_by_artist[a_id]
         })
 
-    # Build edge list with outward radial Bézier curvature
+    # Build edge list with inward radial Bézier curvature (spiderweb aesthetic)
     formatted_edges = []
     for idx, e in enumerate(edges):
         src = e["source"]
@@ -132,9 +141,11 @@ def main():
         # Midpoint
         mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
-        # Outward radial deflection check: does +normal point away from galactic center (0,0)?
-        dot = (mx + nx) * mx + (my + ny) * my - (mx * mx + my * my)
-        curvature = 0.14 if dot >= 0 else -0.14
+        # Inward radial deflection check: does +normal point away from galactic center (0,0)?
+        # dot = (mx + nx) * mx + (my + ny) * my - (mx * mx + my * my) = mx * nx + my * ny
+        dot = mx * nx + my * ny
+        # Invert curvature so edges deflect inward toward galactic center (spiderweb effect)
+        curvature = -0.14 if dot >= 0 else 0.14
 
         formatted_edges.append({
             "id": f"e_{idx}",

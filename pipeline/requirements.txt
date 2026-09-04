@@ -1,0 +1,6 @@
+numpy>=1.22
+scipy>=1.7
+networkx>=3.0
+fa2>=1.1.2
+httpx>=0.28.0
+tqdm>=4.66.0

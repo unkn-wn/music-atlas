@@ -20,6 +20,7 @@ export interface AtlasNode {
   continentName: string;
   popularity: number;
   followers: number;
+  monthlyListeners?: number;
   image: string;
   previewUrl: string;
   topTrack: string;

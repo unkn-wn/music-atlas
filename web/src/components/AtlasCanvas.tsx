@@ -324,7 +324,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         {
           x: nodeDisplayData.x,
           y: nodeDisplayData.y,
-          ratio: 0.38
+          ratio: 0.58
         },
         { duration: 750 }
       );
@@ -373,14 +373,15 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const sigma = sigmaRef.current;
     const edgeMap = edgeLookupRef.current;
 
-    // Resolve all incident neighbor IDs when an artist is selected
+    // Resolve all incident neighbor IDs matching the sidebar relationships when an artist is selected
     const neighborIds = new Set<string>();
     let selectedArtistColor = '#38bdf8';
     if (selectedNodeId && graph.hasNode(selectedNodeId)) {
       const nodeAttrs = graph.getNodeAttributes(selectedNodeId);
       selectedArtistColor = (nodeAttrs.color as string) || '#38bdf8';
-      graph.forEachNeighbor(selectedNodeId, (neighbor) => {
-        neighborIds.add(neighbor);
+      const crossovers = (nodeAttrs.topCrossovers as Array<{ neighborId: string }>) || [];
+      crossovers.slice(0, 10).forEach((c) => {
+        neighborIds.add(c.neighborId);
       });
     }
 
@@ -391,11 +392,11 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       const dst = cached ? cached.dst : graph.target(edge);
       const tier = zoomTierRef.current;
 
-      // 1. When an artist is selected: illuminate ONLY their incident relationship lines in the artist's color!
+      // 1. When an artist is selected: illuminate ONLY lines connecting to the exact same relationships shown in the sidebar!
       if (selectedNodeId) {
-        const isIncident = (src === selectedNodeId || dst === selectedNodeId);
+        const isIncidentToSelected = (src === selectedNodeId && neighborIds.has(dst)) || (dst === selectedNodeId && neighborIds.has(src));
 
-        if (isIncident) {
+        if (isIncidentToSelected) {
           return {
             ...data,
             hidden: false,
@@ -473,7 +474,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           return {
             ...data,
             type: 'circle',
-            size, // Preserve exact same size (no scale-up)
+            size: Math.min(18.0, Math.max(8.0, size * 0.72)), // Balanced orbital relationship badge size
             color: originalColor,
             forceLabel: true,
             label: originalLabel,

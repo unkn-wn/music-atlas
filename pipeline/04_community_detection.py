@@ -1,135 +1,115 @@
 """
-Step 4: Community Detection & Perceptual Color Assignment.
-Anchors colors strictly to topological communities via Louvain / Leiden modularity
-on the weighted co-occurrence graph. Uses TF-IDF on member artist genres to assign
-accurate consensus continent titles and Oklab-derived distinct color palettes.
+Step 4: Raw Apple iTunes Genre Grouping.
+Groups artists directly by their raw Apple iTunes API primaryGenreName output.
+Zero hardcoding, zero quotas, zero heuristic mapping.
+Assigns distinct, vibrant colors from a perceptual palette.
 """
 
 import os
 import json
-import math
-from collections import Counter, defaultdict
-import networkx as nx
+from collections import defaultdict
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
-# Harmonious, vibrant, perceptually distinct continent palette (Hex codes)
-CONTINENT_PALETTE = [
-    "#F59E0B",  # Amber / Warm Gold (Hip-Hop / Rap)
-    "#EC4899",  # Hot Pink / Magenta (Pop)
-    "#10B981",  # Emerald Green (Indie / Alternative)
-    "#06B6D4",  # Electric Cyan (EDM / Electronic)
-    "#EF4444",  # Crimson / Ruby (Rock / Metal)
-    "#8B5CF6",  # Deep Violet / Purple (R&B / Soul)
-    "#EAB308",  # Sunshine Yellow (Latin / Reggaeton)
-    "#D97706",  # Ochre / Terracotta (Country / Folk)
-    "#F43F5E",  # Rose / Coral (K-Pop / Asian Pop)
-    "#6366F1",  # Indigo (Jazz / Blues)
-    "#14B8A6",  # Teal / Mint (Classical / Ambient)
-    "#3B82F6",  # Royal Blue (UK Drill / Grime)
-    "#84CC16",  # Lime Green (Hyperpop / Glitch)
-    "#A855F7",  # Bright Orchid (Neo-Psychedelic)
+# Vibrant palette for raw Apple iTunes API genres
+GENRE_PALETTE = {
+    "Hip-Hop/Rap": "#10B981",          # Emerald Green
+    "Pop": "#EC4899",                  # Hot Pink / Magenta
+    "Alternative": "#F59E0B",          # Warm Amber / Orange
+    "Dance": "#06B6D4",                # Electric Cyan
+    "Electronic": "#06B6D4",           # Electric Cyan
+    "Rock": "#EF4444",                 # Crimson Red
+    "Hard Rock": "#EF4444",            # Crimson Red
+    "Metal": "#DC2626",                # Deep Red
+    "R&B/Soul": "#8B5CF6",             # Deep Violet
+    "Country": "#D97706",              # Terracotta / Ochre
+    "K-Pop": "#F43F5E",                # Coral Rose
+    "Latin": "#EAB308",                # Sunshine Gold
+    "Urbano latino": "#EAB308",        # Sunshine Gold
+    "Pop Latino": "#FBBF24",           # Amber Yellow
+    "Música Mexicana": "#CA8A04",      # Dark Gold
+    "Música tropical": "#F59E0B",      # Orange Gold
+    "Classical": "#6366F1",            # Cosmic Indigo
+    "Soundtrack": "#6366F1",           # Cosmic Indigo
+    "Singer/Songwriter": "#A855F7",    # Bright Purple
+    "Afro-fusion": "#14B8A6",          # Bright Teal
+}
+
+PALETTE_FALLBACK = [
+    "#10B981", "#EC4899", "#F59E0B", "#06B6D4", "#EF4444",
+    "#8B5CF6", "#D97706", "#F43F5E", "#EAB308", "#14B8A6",
+    "#6366F1", "#3B82F6", "#84CC16", "#A855F7", "#22D3EE",
+    "#F97316", "#E11D48"
 ]
 
 def main():
-    edges_file = os.path.join(OUTPUT_DIR, "sparsified_edges.json")
     catalog_file = os.path.join(OUTPUT_DIR, "artists_catalog.json")
+    cache_file = os.path.join(OUTPUT_DIR, "itunes_genre_cache.json")
 
-    if not os.path.exists(edges_file) or not os.path.exists(catalog_file):
-        raise FileNotFoundError("Missing inputs from previous steps.")
+    if not os.path.exists(catalog_file):
+        raise FileNotFoundError(f"Missing {catalog_file}")
 
-    with open(edges_file, "r", encoding="utf-8") as f:
-        edges = json.load(f)
     with open(catalog_file, "r", encoding="utf-8") as f:
         catalog = json.load(f)
 
-    artist_meta = {a["id"]: a for a in catalog}
+    itunes_cache = {}
+    if os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as f:
+            itunes_cache = json.load(f)
 
-    # Build NetworkX graph
-    G = nx.Graph()
-    for e in edges:
-        G.add_edge(e["source"], e["target"], weight=e["weight"])
-
-    # Also add isolated nodes if any
+    # Group artists strictly by their raw Apple iTunes primaryGenreName
+    genre_to_artists = defaultdict(list)
     for a in catalog:
-        if a["id"] not in G:
-            G.add_node(a["id"])
+        item = itunes_cache.get(a["name"]) or itunes_cache.get(a["name"].lower())
+        if isinstance(item, dict):
+            raw_g = item.get("primaryGenreName") or a.get("macro_genre") or "Pop"
+        elif isinstance(item, str):
+            raw_g = item
+        else:
+            raw_g = a.get("macro_genre") or "Pop"
+        
+        raw_g = raw_g.strip() or "Pop"
+        genre_to_artists[raw_g].append(a["id"])
 
-    print(f"Running Louvain community detection on graph ({G.number_of_nodes()} nodes, {G.number_of_edges()} edges)...")
-    communities = nx.community.louvain_communities(G, weight="weight", resolution=1.0, seed=42)
-
-    # Sort communities by size descending
-    communities = sorted(communities, key=len, reverse=True)
-    print(f"Detected {len(communities)} topological communities.")
-
-    # Compute TF-IDF genre labels for each community
-    total_comms = len(communities)
-    genre_doc_freq = Counter()
-    comm_genre_counts = []
-
-    for comm in communities:
-        g_counter = Counter()
-        for a_id in comm:
-            a_data = artist_meta.get(a_id, {})
-            for g in a_data.get("genres", []):
-                g_counter[g] += 1
-        comm_genre_counts.append(g_counter)
-        for g in g_counter:
-            genre_doc_freq[g] += 1
+    # Sort genres by artist count descending
+    sorted_genres = sorted(genre_to_artists.keys(), key=lambda g: len(genre_to_artists[g]), reverse=True)
 
     continents = []
     artist_continent_map = {}
 
-    for idx, (comm, g_counter) in enumerate(zip(communities, comm_genre_counts)):
-        color = CONTINENT_PALETTE[idx % len(CONTINENT_PALETTE)]
-
-        # TF-IDF ranking of genres
-        tfidf_scores = []
-        total_genres_in_comm = sum(g_counter.values()) or 1
-        for g, count in g_counter.items():
-            tf = count / total_genres_in_comm
-            idf = math.log((total_comms + 1) / (genre_doc_freq[g] + 1)) + 1
-            tfidf_scores.append((g, tf * idf))
-
-        tfidf_scores.sort(key=lambda x: x[1], reverse=True)
-        top_genres = [g[0] for g in tfidf_scores[:3]]
-
-        # Consensus title
-        if top_genres:
-            title = " / ".join(w.title() for w in top_genres)
-        else:
-            # Fallback to majority macro_genre from catalog
-            macro_counts = Counter(artist_meta.get(a, {}).get("macro_genre", "Various") for a in comm)
-            title = macro_counts.most_common(1)[0][0]
+    for idx, genre_name in enumerate(sorted_genres, start=1):
+        artist_ids = genre_to_artists[genre_name]
+        color = GENRE_PALETTE.get(genre_name, PALETTE_FALLBACK[idx % len(PALETTE_FALLBACK)])
 
         continent_info = {
-            "id": idx + 1,
-            "name": title,
+            "id": idx,
+            "name": genre_name,
             "color": color,
-            "artistCount": len(comm),
-            "artistIds": list(comm)
+            "artistCount": len(artist_ids),
+            "artistIds": artist_ids
         }
         continents.append(continent_info)
 
-        for a_id in comm:
+        for a_id in artist_ids:
             artist_continent_map[a_id] = {
-                "continentId": idx + 1,
-                "continentName": title,
+                "continentId": idx,
+                "continentName": genre_name,
                 "color": color
             }
 
-    print(f"Formed {len(continents)} continents:")
-    for c in continents[:8]:
-        print(f"  - [{c['color']}] Continent #{c['id']}: {c['name']} ({c['artistCount']} artists)")
+    print(f"Grouped {len(catalog)} artists into {len(continents)} raw Apple iTunes genre groups:")
+    for c in continents:
+        print(f"  - [{c['color']}] Group #{c['id']}: {c['name']} ({c['artistCount']} artists)")
 
     # Save output
-    with open(os.path.join(OUTPUT_DIR, "communities.json"), "w", encoding="utf-8") as f:
+    out_file = os.path.join(OUTPUT_DIR, "communities.json")
+    with open(out_file, "w", encoding="utf-8") as f:
         json.dump({
             "continents": continents,
             "artist_continent_map": artist_continent_map
         }, f, indent=2)
 
-    print("Step 4 complete. Saved communities.json")
+    print(f"Step 4 complete. Saved {out_file}")
 
 if __name__ == "__main__":
     main()

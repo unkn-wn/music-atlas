@@ -1,325 +1,285 @@
-# Dynamic Artist Catalog Harvesting: Spotify API Architecture & Scaling Plan
-*Automated Ingestion of 1,000 to 10,000 Artists for Music Atlas*
+# Dynamic Music Atlas: Real-Time Streaming Data & Co-Occurrence Architecture
+*End-to-End Autonomous Harvesting of 1,000–2,500+ Artists & Thousands of Public Playlists with Zero Hardcoding and Zero Synthetic Seeding*
 
 ---
 
-## 1. Executive Summary & Problem Analysis
+## 1. Executive Summary & Real Data Mandate
 
-### 1.1 The Limitations of Hardcoded Catalogs
-The initial prototype of Music Atlas relied on hardcoded lists of artists across 11 sectors ([`expand_catalog.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/expand_catalog.py)). While effective for rapid prototyping and guaranteeing specific landmark artists (e.g., Taylor Swift, Drake, Coldplay, The Chainsmokers), hardcoding presents severe bottlenecks as the atlas scales:
-1. **Selection Bias & Omissions**: Landmark global acts or trending breakthrough artists are easily omitted without manual auditing.
-2. **Maintenance Debt**: Adding hundreds or thousands of artists by hand is unsustainable.
-3. **Stale Metrics**: Hardcoded follower counts and popularity scores become inaccurate over time.
-4. **Scale Ceiling**: Scaling to 1,000, 5,000, or 10,000+ artists requires programmatic discovery, deduplication, and automated hydration.
+### 1.1 The Strict Zero-Hardcoding Mandate
+The initial prototype of Music Atlas relied on hardcoded Python arrays ([`artist_catalog.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/artist_catalog.py) and [`expand_catalog.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/expand_catalog.py)) and procedural playlist generation ([`generate_high_fidelity_playlists()`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/01_data_source.py#L104-L256)). 
 
-### 1.2 Evaluation of Data Sources: Last.fm vs. Spotify Developer API
+While convenient for small-scale testing, this introduced fundamental architectural flaws:
+1. **Selection Bias**: Hand-curated lists favor personal preferences and miss explosive global breakthroughs.
+2. **Artificial Topology**: Synthetic co-occurrence simulations generate connections based on presumed genre affinity rather than real human listening behavior.
+3. **Stale Metrics**: Manually typed follower and popularity counts diverge from streaming reality.
 
-| Dimension | Last.fm Web API (`chart.getTopArtists`) | Spotify Web API (`/v1/search` + Playlists) | Verdict |
-| :--- | :--- | :--- | :--- |
-| **Data Integrity & Representation** | **Biased towards scrobbler power users**. Relies entirely on users installing browser extensions or third-party scrobblers. Heavily skewed towards indie rock, shoegaze, metal, and retro genres. | **Ground truth for global streaming**. Reflects billions of daily active streams across all demographics and regions worldwide. | **Spotify is vastly superior for real streaming charts.** |
-| **Authentication & Cost** | Simple API key (free, instant). | Free Spotify Developer App (`client_id` + `client_secret`, Client Credentials Grant, zero OAuth login required). | **Tie** (Both are free and take < 2 minutes to set up). |
-| **Data Richness** | Artist name, scrobbles, listeners, MBID. Images are low-res or deprecated. | High-res album/artist artwork (640x640), exact Spotify popularity index (0–100), follower count, verified Spotify IDs, and rich genre tags. | **Spotify is vastly superior for UI assets and metrics.** |
-| **Direct Endpoints for "Top Artists"** | Provides direct `chart.getTopArtists` with pagination up to 10,000. | Does not provide a single `GET /artists/top` endpoint; requires multi-dimensional search matrix & playlist harvesting. | **Last.fm is simpler, but Spotify produces vastly higher-quality output.** |
-
-**Conclusion**: Spotify Developer Web API is the definitive choice for Music Atlas. By building an intelligent multi-query crawling matrix across subgenres and official editorial playlists, we can reliably harvest 1,000 to 10,000+ artists with authentic Spotify metrics, native artwork, and diverse genre distribution.
+**Architectural Principle**: **All data must be empirical**.
+- Every artist must originate from live global streaming charts.
+- Every monthly listener count must be the exact daily ground-truth metric.
+- Every edge in the atlas must represent real co-occurrence across actual public streaming playlists.
+- No hardcoded artist dictionaries, no synthetic bridge probabilities, and no randomized playlist seeding.
 
 ---
 
-## 2. Spotify Developer API Ingestion Architecture
+### 1.2 Evaluation of Streaming APIs & The Spotify Paywall Reality
+
+| Vector | Source | Access / Auth | Real World Viability | Verdict |
+| :--- | :--- | :--- | :--- | :--- |
+| **Official Spotify Developer API** | `api.spotify.com/v1/*` | Client Credentials (`client_id` + `secret`) | **BLOCKED (HTTP 403)**: Spotify recently enacted a policy requiring an active Spotify Premium subscription for the app owner. Free developer accounts receive `403 Forbidden` on search, playlists, and artists. | **Unusable for open-source / zero-cost deployment.** |
+| **Deezer Public API** | `api.deezer.com/*` | Open / Keyless | **Niche Representation**: Deezer has ~16M MAU (concentrated in France and Brazil) vs. Spotify's 620M+ and YouTube's 100M+. Lacks global zeitgeist and underrepresents US/Asian hip-hop, indie, and K-Pop. | **Insufficient for primary global catalog.** Used only as fallback metadata provider. |
+| **Kworb Daily Spotify Index** | `kworb.net/spotify/listeners.html` | Open Static HTML | **Ground Truth**: Scrapes daily Spotify client metrics for the top 2,500 artists globally. Provides exact 22-char Spotify IDs and true Monthly Active Listeners (e.g., Bruno Mars 133M, The Weeknd 115M). | **Definitive source for Artist Universe & Active Listeners.** |
+| **Spotify Public Embeds** | `open.spotify.com/embed/playlist/*` | Open SSR JSON (`__NEXT_DATA__`) | **Official Editorial Playlists**: No auth, zero 403 errors. Returns full tracklists, artist names, and direct official Spotify 30s MP3 audio previews (`p.scdn.co/mp3-preview/...`). | **Definitive source for Flagship Editorial Playlists & Previews.** |
+| **YouTube Music Public Engine** | `ytmusicapi` | Open Unauthenticated Session | **Massive Public Curations**: Millions of public and community playlists across all genres and countries without login. | **Definitive source for large-scale playlist harvesting (thousands of playlists).** |
+| **Apple iTunes Search API** | `itunes.apple.com/search` | Open REST API | **Deterministic Taxonomy**: Standardized, clean `primaryGenreName` across all artists without API keys. | **Definitive source for automated genre classification.** |
+
+---
+
+## 2. System Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                          SPOTIFY DEVELOPER PORTAL                           │
-│                 Create App ──> Obtain Client ID & Client Secret             │
+│                    LAYER 0: ARTIST HARVESTING & TAXONOMY                    │
+│                        (pipeline/00_harvest_artists.py)                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  1. Kworb Top 2,500 Spotify Artists Index                                   │
+│     └── Slices top artists globally with 22-char Spotify IDs & Listeners    │
+│  2. Apple iTunes Search API (Throttled + Disk-Cached)                       │
+│     └── Direct raw primaryGenreName output (no quotas, no normalization)    │
+│  3. Raw Empirical Taxonomy:                                                 │
+│     └── Preserves exact iTunes genres (Hip-Hop/Rap, Pop, Rock, Country...)  │
+│  4. Export: pipeline/output/artists_catalog.json                            │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│              STEP 0: pipeline/00_fetch_spotify_catalog.py                   │
+│                    LAYER 1: LARGE-SCALE PLAYLIST HARVESTING                 │
+│                          (pipeline/01_data_source.py)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Multi-Vector Public Streaming Playlist Ingestion:                          │
+│  ├── Vector A: Spotify Public Embeds (~500 Flagship Editorial Playlists)    │
+│  │   └── Today's Top Hits, RapCaviar, mint, Viva Latino, Rock This, etc.   │
+│  ├── Vector B: YouTube Music Engine (500–800 Genre/Mood/Artist Playlists)   │
+│  │   └── Public community & user playlists via unauthenticated ytmusicapi   │
+│  └── Vector C: Kworb / Spotify Daily Country Charts (70+ Country Top 200)   │
+│      └── Regional listening patterns from US, UK, Brazil, Japan, Mexico...  │
 │                                                                             │
-│  1. Client Credentials OAuth Flow (POST https://accounts.spotify.com/token) │
-│  2. Dual-Engine Ingestion Pipeline:                                         │
-│     ├── Engine A: Subgenre Query Matrix (/v1/search?q=genre:"..."&type=art) │
-│     │    └── 60+ Subgenre buckets × Top 50-200 artists/bucket               │
-│     └── Engine B: Editorial Flagship Playlists (/v1/playlists/{id}/tracks)  │
-│          └── Today's Top Hits, RapCaviar, Viva Latino, mint, Rock This, etc.│
-│  3. Token-Bucket Rate Limiting (Exponential Backoff + 429 Retry-After)      │
-│  4. Deduplication & Cross-Genre Merging by Spotify Artist URI               │
-│  5. Popularity Thresholding & Quota Balancing                               │
-│  6. Export Normalized JSON: pipeline/output/catalog_expanded.json           │
+│  Total Dataset: 1,200–1,800 real playlists yielding >300,000 pairings       │
+│  Normalization & Canonical Matching:                                        │
+│  ├── 22-char Spotify ID matching (Vectors A & C)                             │
+│  └── NFKD Unicode normalization + delimiter splitting for YouTube Music     │
+│  Prune disconnected orphan nodes (<3 co-occurrences)                        │
+│  Export: pipeline/output/playlist_artist_pairs.json                         │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      DOWNSTREAM MUSIC ATLAS PIPELINE                        │
-│  01_data_source.py ──> 02_build_cooccurrence.py ──> 03_normalize.py        │
-│  ──> 04_community.py ──> 05_layout_fa2.py ──> 06_hydrate.py ──> 07_export   │
+│                 LAYER 2: GRAPH COMPUTATION & EMBEDDING                      │
+│                         (Steps 02 ──> 07)                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  02_build_cooccurrence.py   ──> Sparse co-occurrence matrix C = B^T B       │
+│  03_normalize_and_sparsify  ──> Pointwise Mutual Information (PMI) + k-NN   │
+│  04_community_detection.py  ──> Native Louvain Modularity (11 communities)  │
+│  05_layout_forceatlas2.py   ──> Canvas [-2200, 2200] + cKDTree relaxation   │
+│  06_hydrate_metadata.py     ──> Multi-tier hydration (Spotify Embed / Deezer│
+│                                 / iTunes 30s previews + 640x640 artwork)    │
+│  07_export_web_artifacts.py ──> atlas-graph.json (Top 5% headliners)        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Detailed Ingestion Mechanics
+## 3. Detailed Component Mechanics
 
-### 3.1 Authentication: Client Credentials Grant Flow
-The Client Credentials Flow is designed specifically for server-to-server and automated backend scripts. It does not require any user authorization popups or OAuth redirect URIs:
+### 3.1 Step 0: Artist Harvesting (`00_harvest_artists.py`)
 
-```http
-POST https://accounts.spotify.com/api/token
-Authorization: Basic <base64(client_id:client_secret)>
-Content-Type: application/x-www-form-urlencoded
+#### A. Ingestion from Kworb Spotify Daily Listeners Table
+* **URL**: `https://kworb.net/spotify/listeners.html`
+* **Payload Structure**: Static HTML containing table rows:
+  ```html
+  <tr>
+    <td>1</td>
+    <td><a href="artist/0du5cEVh5yTK9QJze8zA0C_songs.html">Bruno Mars</a></td>
+    <td>133,072,425</td>
+    <td>+254,120</td>
+  </tr>
+  ```
+* **Extraction**: Regex `href="artist/([a-zA-Z0-9]{22})_songs\.html">([^<]+)</a>.*?<td>([0-9,]+)</td>`
+* **Logarithmic Popularity Mapping**:
+  Because Spotify's private API `popularity` (0–100) is unavailable, we derive an exact empirical popularity index from the Monthly Listeners ($L$):
+  $$\text{popularity} = \min\left(100, \max\left(20, \text{round}\left(20 + 80 \times \frac{\log_{10}(L) - 6.0}{8.2 - 6.0}\right)\right)\right)$$
+  * $L = 150,000,000 \implies 100$
+  * $L = 50,000,000 \implies 82$
+  * $L = 10,000,000 \implies 56$
+  * $L = 1,000,000 \implies 20$
 
-grant_type=client_credentials
-```
+#### B. Automated Genre Classification via Apple iTunes Search
+* **Endpoint**: `https://itunes.apple.com/search?term={name}&entity=musicArtist&limit=1`
+* **Return Schema**:
+  ```json
+  {
+    "resultCount": 1,
+    "results": [
+      {
+        "artistName": "The Weeknd",
+        "primaryGenreName": "R&B/Soul",
+        "primaryGenreId": 15
+      }
+    ]
+  }
+  ```
+* **Rate-Limit Mitigation**:
+  * Apple limits requests to ~20 req/minute per IP.
+  * **Persistent Cache**: `pipeline/output/itunes_genre_cache.json` stores `{ "artist_name_lower": "primaryGenreName" }`.
+  * Cold runs enforce a 3.1s polite delay between uncached requests. Warm runs execute instantly from disk.
+  * Filter down to target artist quota *before* querying iTunes to minimize API calls.
 
-**Response**:
-```json
-{
-  "access_token": "BQ...xyz",
-  "token_type": "Bearer",
-  "expires_in": 3600
-}
-```
-The token is cached in memory and automatically refreshed every 55 minutes.
+#### C. Raw Apple iTunes Genres (Zero Quotas, Zero Mapping)
+To eliminate manual bias, synthetic sector buckets, and heuristic grouping errors, genres are kept **100% raw as returned by the Apple iTunes API**:
 
-### 3.2 Bypassing the 1,000-Offset Limit via Multi-Dimensional Search
-The Spotify Web API enforces a strict constraint on search pagination:
-$$\text{offset} + \text{limit} \le 1000$$
-Attempting to request `offset=1000` returns `HTTP 400 Bad Request`. Therefore, one cannot simply query `q=*` and paginate to 10,000.
-
-Instead, we employ a **Multi-Dimensional Query Matrix**:
-
-#### Dimension 1: Micro-Genre Partitioning
-Spotify indexes over 6,000 micro-genres derived from the Every Noise at Once taxonomy. When searching `q=genre:"<genre_name>"&type=artist`, Spotify automatically orders matches by relevance and artist popularity:
-- `genre:"trap"` returns Drake, Travis Scott, Future, 21 Savage...
-- `genre:"indie rock"` returns Arctic Monkeys, The Strokes, Tame Impala, The 1975...
-- `genre:"melodic techno"` returns ARTBAT, Tale of Us, Anyma, Stephan Bodzin...
-- `genre:"bachata"` returns Romeo Santos, Aventura, Prince Royce...
-
-By sampling 40–80 targeted subgenres across all 11 musical continents at depths of 50 to 150 artists per query, we acquire 3,000 to 8,000 distinct artists without ever approaching the 1,000-item offset boundary.
-
-#### Dimension 2: Year Interval Slicing (For Massive Macro-Genres)
-For enormous genres like "rock" or "pop" where the top 1,000 only scratches the surface, Spotify supports the `year:` search modifier:
-- `q=genre:"rock" year:2020-2025` (contemporary modern rock)
-- `q=genre:"rock" year:2010-2019` (2010s alternative & indie)
-- `q=genre:"rock" year:2000-2009` (2000s post-grunge & emo)
-- `q=genre:"rock" year:1990-1999` (90s grunge & alt-rock)
-- `q=genre:"rock" year:1970-1989` (classic rock & metal pioneers)
-
-Each sub-query resets the 1,000-item offset limit, allowing systematic harvesting of deep catalog legends alongside modern chart-toppers.
-
-#### Dimension 3: Flagship Editorial Playlist Ingestion
-Spotify's editorial team maintains official cultural playlists that define the streaming zeitgeist. Each playlist contains 50 to 100 tracks from leading artists currently receiving algorithmic and editorial promotion:
-- **Global / Pop**: *Today's Top Hits* (`37i9dQZF1DXcBWIGoYBM5M`), *Pop Rising* (`37i9dQZF1DWUa8ZRTfalHk`)
-- **Hip-Hop / Rap**: *RapCaviar* (`37i9dQZF1DX0XUsuxWHRQd`), *Get Turnt* (`37i9dQZF1DWY4xHQp97fN6`)
-- **Latin**: *Viva Latino* (`37i9dQZF1DX10zKzsJ2jva`), *Baila Reggaeton* (`37i9dQZF1DWY7IeIP1vjxl`)
-- **Rock / Alternative**: *Rock This* (`37i9dQZF1DX1rVvRgNX2YR`), *New Noise* (`37i9dQZF1DWT2jS7NwYPVI`)
-- **EDM / Dance**: *mint* (`37i9dQZF1DX4dyzvuaRJ0n`), *Dance Party* (`37i9dQZF1DXaXB8fQg7xif`)
-- **R&B**: *Are & Be* (`37i9dQZF1DX4SBhb3fqCJd`), *Chilled R&B* (`37i9dQZF1DX2UgsUIg75Vg`)
-- **Country**: *Hot Country* (`37i9dQZF1DX1lVhptIYRda`), *Country Gold* (`37i9dQZF1DWZBCPUIUs2iU`)
-- **K-Pop**: *K-Pop ON!* (`37i9dQZF1DX9tPFwDMOaN1`)
-- **Afrobeats**: *African Heat* (`37i9dQZF1DX48TTZL62Yht`)
-- **Ambient / Classical**: *Peaceful Piano* (`37i9dQZF1DX4sWSpwq3LiO`), *Classical Essentials* (`37i9dQZF1DWWEJlAGA9gs0`)
-
-Querying these playlists extracts the primary artists and guarantees that every contemporary streaming giant is included in the catalog with 100% certainty.
+- The exact string returned in `primaryGenreName` (e.g. `Hip-Hop/Rap`, `Pop`, `Alternative`, `Rock`, `Country`, `R&B/Soul`, `K-Pop`, `Latin`, `Dance`, etc.) is retained as the artist's genre.
+- **Zero Hardcoded Quotas**: Artists are selected strictly by their true global listening popularity from Kworb, rather than forcing quotas across synthetic continent categories.
+- **Zero Heuristic Normalization**: No dictionary mapping or substring rules. The raw Apple iTunes classification is preserved as empirical ground truth.
 
 ---
 
-## 4. Genre Taxonomy & Balanced Continent Distribution
+### 3.2 Step 1: Large-Scale Public Playlist Harvesting (`01_data_source.py`)
 
-To ensure Music Atlas does not collapse into an undifferentiated mass of pop and rap, the ingestion engine uses a **Balanced Partitioning Strategy**. The 11 continents are divided into curated subgenre clusters:
-
-| Continent Name | Default Hex Color | Curated Subgenres for Spotify Search Matrix | Target Quota (1k Tier) | Target Quota (5k Tier) | Target Quota (10k Tier) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Hip-Hop / Rap** | `#E11D48` (Crimson) | `hip hop`, `trap`, `southern hip hop`, `drill`, `boom bap`, `gangster rap`, `conscious hip hop`, `melodic rap` | 130 | 650 | 1,300 |
-| **Pop & Mainstream** | `#3B82F6` (Electric Blue) | `pop`, `dance pop`, `post-teen pop`, `synthpop`, `electropop`, `europop`, `teen pop` | 130 | 650 | 1,300 |
-| **Indie & Alt Rock** | `#F59E0B` (Amber) | `indie rock`, `modern rock`, `indie pop`, `shoegaze`, `bedroom pop`, `post-punk`, `indie folk`, `dream pop` | 110 | 550 | 1,100 |
-| **EDM & Electronic** | `#EC4899` (Hot Pink) | `edm`, `electro house`, `slap house`, `progressive house`, `melodic techno`, `drum and bass`, `dubstep`, `trance` | 100 | 500 | 1,000 |
-| **R&B & Soul** | `#8B5CF6` (Purple) | `r&b`, `contemporary r&b`, `urban contemporary`, `neo soul`, `soul`, `afro r&b` | 90 | 450 | 900 |
-| **Urbano Latino** | `#10B981` (Emerald) | `reggaeton`, `trap latino`, `urbano latino`, `latin pop`, `bachata`, `regional mexican`, `corridos tumbados` | 100 | 500 | 1,000 |
-| **Rock & Metal** | `#EF4444` (Flame Red) | `hard rock`, `alternative metal`, `metalcore`, `heavy metal`, `nu metal`, `classic rock`, `punk`, `grunge` | 90 | 450 | 900 |
-| **Country & Americana** | `#D97706` (Ochre) | `country`, `contemporary country`, `country road`, `americana`, `outlaw country`, `bluegrass` | 70 | 350 | 700 |
-| **K-Pop & Asian Pop** | `#06B6D4` (Cyan) | `k-pop`, `k-pop boy group`, `k-pop girl group`, `j-pop`, `j-rock`, `c-pop`, `mandopop` | 70 | 350 | 700 |
-| **Afrobeats & African** | `#F97316` (Orange) | `afrobeats`, `amapiano`, `afropop`, `nigerian pop`, `gengetone`, `alté` | 60 | 300 | 600 |
-| **Ambient & Classical** | `#64748B` (Slate Blue) | `ambient`, `soundtrack`, `modern classical`, `composition ambient`, `neo-classical`, `piano cover`, `lo-fi beats` | 50 | 250 | 500 |
-| **TOTALS** | — | — | **1,000** | **5,000** | **10,000** |
-
----
-
-## 5. Rate Limiting, Deduplication, and Normalization
-
-### 5.1 Rate Limiting Architecture
-Spotify enforces a rolling 30-second rate-limit window. When exceeded, the API responds with:
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 12
-```
-
-The crawler implements a **Token-Bucket Rate Limiter**:
-```python
-import time
-import requests
-
-class SpotifyRateLimiter:
-    def __init__(self, requests_per_second=10):
-        self.delay = 1.0 / requests_per_second
-
-    def get(self, session, url, headers, params=None):
-        while True:
-            time.sleep(self.delay)
-            resp = session.get(url, headers=headers, params=params)
-            if resp.status_code == 200:
-                return resp.json()
-            elif resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", 5))
-                print(f"[Rate Limit] 429 received. Sleeping {retry_after + 1}s...")
-                time.sleep(retry_after + 1)
-            elif resp.status_code in [500, 502, 503]:
-                time.sleep(2.0)
-            else:
-                resp.raise_for_status()
-```
-
-### 5.2 Performance & Execution Time Estimates
-- **1,000 Artists Target**:
-  - ~30 genre queries $\times$ 1–2 pages (50 items/page) = ~50 HTTP calls.
-  - At 10 requests/sec: **~5 seconds execution time**.
-- **5,000 Artists Target**:
-  - ~60 genre queries $\times$ 2–3 pages = ~150 HTTP calls.
-  - Execution time: **~15–20 seconds**.
-- **10,000 Artists Target**:
-  - ~80 genre queries $\times$ 3–4 pages = ~300 HTTP calls.
-  - Execution time: **~30–45 seconds**.
-
-### 5.3 Deduplication & Multi-Genre Attribution
-Because an artist like Drake appears in `hip hop`, `trap`, `canadian pop`, and `pop rap`:
-1. Use the unique Spotify Artist ID (`artist["id"]`) as the dictionary key.
-2. Accumulate all unique genres in a `set`:
-   ```python
-   catalog[artist_id]["genres"].update(artist_payload["genres"])
-   ```
-3. Store the highest recorded popularity score (0–100) and exact Spotify follower count.
-4. Extract the highest-resolution image:
-   ```python
-   images = artist_payload.get("images", [])
-   # Pick the 640x640 or highest available image URL
-   image_url = images[0]["url"] if images else ""
-   ```
-5. Assign the primary `macro_genre` using TF-IDF / keyword matching against the 11 continent definitions.
-
----
-
-## 6. Algorithmic Scalability (1,000 $\to$ 10,000 Artists)
-
-Scaling from 565 artists to 1,000, 5,000, and 10,000 artists introduces specific computational and rendering challenges across the pipeline and frontend:
-
-### 6.1 Bipartite Projection & Sparse Matrix Multiplication ($C = M^T M$)
-In [`02_build_cooccurrence.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/02_build_cooccurrence.py), we construct the artist-playlist incidence matrix $M \in \mathbb{R}^{P \times N}$ and compute the co-occurrence matrix $C = M^T M$.
-- At $N = 1,000$ artists: $C$ has $10^6$ potential elements. Matrix multiplication takes **< 0.05 seconds**.
-- At $N = 5,000$ artists: $C$ has $2.5 \times 10^7$ potential elements. Using `scipy.sparse.csr_matrix`, $M^T M$ completes in **~0.3 seconds**.
-- At $N = 10,000$ artists: $C$ has $10^8$ potential elements, but with $99.2\%$ sparsity, memory footprint is $< 40$ MB and computation takes **~1.2 seconds**.
-
-### 6.2 ForceAtlas2 Physics Simulation at 10,000 Nodes
-In [`05_layout_forceatlas2.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/05_layout_forceatlas2.py), naive force calculation is $O(N^2)$. At $N = 10,000$, $N^2 = 10^8$ operations per step (would take hours).
-**Solution: Barnes-Hut Quadtree Approximation ($O(N \log N)$)**:
-The `fa2` Python C-extension implements Barnes-Hut spatial quadtrees where far-off clusters are approximated as single centers of mass:
-- For $N = 1,000$: 800 iterations take **~4 seconds**.
-- For $N = 5,000$: 1,200 iterations take **~25 seconds**.
-- For $N = 10,000$: 1,500 iterations with Barnes-Hut $\theta = 1.2$ take **~65 seconds**.
-
-#### Coordinate Space Expansion Table
-To preserve visual breathing room and prevent artist overlap:
-| Artist Count | Canvas Bounding Range | ForceAtlas2 Scaling Ratio ($s$) | Gravity ($g$) | Min Distance Relaxation |
-| :--- | :--- | :--- | :--- | :--- |
-| **565 (Current)** | `[-1350, 1350]` | 24.0 | 0.15 | 28.0 px |
-| **1,000** | `[-2200, 2200]` | 32.0 | 0.12 | 32.0 px |
-| **5,000** | `[-5000, 5000]` | 55.0 | 0.08 | 38.0 px |
-| **10,000** | `[-9000, 9000]` | 85.0 | 0.05 | 45.0 px |
-
-### 6.3 Frontend WebGL & Memory Footprint (Sigma.js v3)
-Sigma.js v3 is built on WebGL 2.0 with instanced geometry rendering. Nodes and edges are batched into typed `Float32Array` vertex buffers:
-- **WebGL Buffer Capacity**: Modern GPUs easily handle $100,000$ vertices in a single draw call. At $N = 10,000$ nodes and $E = 60,000$ edges, Sigma uses approximately 45 MB of VRAM, running at a smooth 60–120 FPS.
-- **Bundle File Size**:
-  - 1,000 nodes + 7,000 edges: `atlas-graph.json` $\approx 2.4$ MB uncompressed (approx. 450 KB gzipped).
-  - 5,000 nodes + 35,000 edges: `atlas-graph.json` $\approx 11$ MB uncompressed (approx. 2.1 MB gzipped).
-  - 10,000 nodes + 70,000 edges: `atlas-graph.json` $\approx 22$ MB uncompressed (approx. 4.2 MB gzipped).
-- **Hierarchical Label LOD (Level of Detail)**:
-  At 10,000 artists, rendering text labels for every node simultaneously would cause severe visual clutter. The label LOD thresholds in [`AtlasCanvas.tsx`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/web/src/components/AtlasCanvas.tsx#L370-L377) scale dynamically:
-  - **Macro Zoom (Ratio > 0.85)**: Show labels only for Top 50 global anchor superstars (`isHeadliner == true`).
-  - **Meso Zoom (0.38 < Ratio <= 0.85)**: Show labels for artists with `popularity >= 82` (~400 artists).
-  - **Micro Zoom (Ratio <= 0.38)**: Render labels for all visible artists within the active viewport bounds.
-
----
-
-## 7. Step-by-Step Implementation Roadmap
-
-```
-Phase 1: Credentials & Configuration
-  └── Set up Spotify Developer App at developer.spotify.com
-  └── Configure environment variables (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)
-
-Phase 2: Ingestion Engine Development
-  └── Create pipeline/00_fetch_spotify_catalog.py
-  └── Implement SpotifyRateLimiter with Client Credentials token refresh
-  └── Build subgenre query taxonomy & playlist track harvester
-  └── Implement deduplication, popularity filtering, and JSON export
-
-Phase 3: 1,000-Artist Milestone Execution
-  └── Run 00_fetch_spotify_catalog.py --target 1000
-  └── Execute pipeline steps 01 through 07
-  └── Validate co-occurrence, Louvain modularity (11-14 communities), and FA2 layout
-  └── Verify WebGL canvas, search bar fly-to, and drawer interactions in browser
-
-Phase 4: Scaling to 5,000 & 10,000 Artists
-  └── Expand query matrix with 80+ micro-genres and historical year slices
-  └── Expand coordinate bounds to [-9000, 9000] and tune Barnes-Hut theta
-  └── Benchmark client bundle compression and zoom LOD performance
-```
-
-### Phase 1: Developer Account & Configuration
-1. User visits [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and logs in with any free or premium Spotify account.
-2. Click **Create App**:
-   - App Name: `Music Atlas Ingestion`
-   - App Description: `Spatial music graph catalog harvester`
-   - Redirect URI: `http://localhost:8080` (placeholder; not used for Client Credentials)
-   - Which API/SDKs: **Web API**
-3. In app settings, copy:
-   - **Client ID**
-   - **Client Secret**
-4. Store in `pipeline/.env`:
-   ```bash
-   SPOTIFY_CLIENT_ID="your_spotify_client_id_here"
-   SPOTIFY_CLIENT_SECRET="your_spotify_client_secret_here"
-   ```
-
-### Phase 2: Ingestion Script (`pipeline/00_fetch_spotify_catalog.py`)
-A standalone, robust script accepting CLI arguments:
-```bash
-python 00_fetch_spotify_catalog.py --target 1000 --min-popularity 35
-python 00_fetch_spotify_catalog.py --target 5000 --min-popularity 25
-python 00_fetch_spotify_catalog.py --target 10000 --min-popularity 20
-```
-
-The script outputs `pipeline/output/catalog_expanded.json` with the exact schema expected by [`01_data_source.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/01_data_source.py):
-```json
-{
-  "artists": [
+#### Vector A: Spotify Public Embed Crawler (~500 Flagship Playlists)
+* **Mechanism**: Spotify renders public playlists via Next.js SSR at `https://open.spotify.com/embed/playlist/{playlist_id}`.
+* **Extraction**:
+  Extract `<script id="__NEXT_DATA__" type="application/json">` and parse `props.pageProps.state.data.entity`:
+  * `title`: Playlist title (e.g., *"Today's Top Hits"*, *"RapCaviar"*)
+  * `trackList`: Array of up to 100 tracks:
+    ```json
     {
-      "id": "4q3ewBCX7sLwd24euuV69X",
-      "name": "Bad Bunny",
-      "spotify_id": "4q3ewBCX7sLwd24euuV69X",
-      "macro_genre": "Urbano Latino",
-      "genres": ["reggaeton", "trap latino", "urbano latino"],
-      "popularity": 96,
-      "followers": 84200000,
-      "image": "https://i.scdn.co/image/ab6761610000e5eb...",
-      "spotify_url": "https://open.spotify.com/artist/4q3ewBCX7sLwd24euuV69X"
+      "uri": "spotify:track:02HyFYmpzt02VJ8k0CqxKj",
+      "title": "Ain't In LA",
+      "subtitle": "ADÉLA",
+      "audioPreview": {
+        "format": "MP3_96",
+        "url": "https://p.scdn.co/mp3-preview/a3d0119e3182fbb19636c2a44737fa3e0b71f939"
+      }
     }
-  ]
-}
-```
+    ```
+* **Playlist Index**:
+  Maintain a registry of ~500 curated Spotify flagship playlists covering:
+  1. **Global Editorial**: *Today's Top Hits, RapCaviar, Viva Latino, mint, Rock This, Are & Be, Hot Country, K-Pop ON!, African Heat, All New Indie*.
+  2. **Subgenre Deep-Dives**: *Techno Bunker, Gold School, Melodic House, Microhouse, Lo-Fi Beats, Bedroom Pop, Deathcore, Neo-Psychedelia, Reggaeton Classics*.
+  3. **Decade Archives**: *All Out 70s, All Out 80s, All Out 90s, All Out 2000s, All Out 2010s*.
+  4. **Mood & Context**: *Workout, Late Night, Chill Hits, Deep Focus, Party, Dinner*.
 
-### Phase 3: Verification Protocol
-1. **Catalog Balance Check**: Verify that every one of the 11 sectors contains between $6\%$ and $14\%$ of the total artist pool, ensuring no genre starvation.
-2. **Graph Connectivity**: Run [`03_normalize_and_sparsify.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/03_normalize_and_sparsify.py) and confirm the giant connected component contains $> 98\%$ of nodes with an average degree between 12 and 18.
-3. **WebGL Frame Rate**: Monitor browser devtools FPS counter at 1,000, 5,000, and 10,000 nodes during rapid zoom/pan and node selection.
+#### Vector B: YouTube Music Public Playlist Crawler (500–800 Playlists)
+* **Mechanism**: Using `ytmusicapi` with an unauthenticated session (`YTMusic()`).
+* **Search Execution**:
+  Iterate across 80+ targeted musical queries (genres, subgenres, and cultural movements):
+  ```python
+  from ytmusicapi import YTMusic
+  yt = YTMusic()
+  results = yt.search("progressive house playlist", filter="playlists", limit=10)
+  for pl in results:
+      full_pl = yt.get_playlist(pl["playlistId"], limit=100)
+  ```
+* **Rate-Limit & Anti-Scraping Strategy**:
+  * 0.4s–0.8s randomized delay between requests.
+  * Local JSON caching under `pipeline/data/crawled_playlists/`.
+  * Target volume: 500–800 playlists (delivers high density while remaining safely within Google/YouTube unauthenticated thresholds).
+
+#### Vector C: Kworb / Spotify Daily Country Charts (70+ Countries)
+* **Mechanism**: Kworb maintains static tables of daily Spotify Top 200 for 70+ countries at `https://kworb.net/spotify/country/{country_code}_daily.html`.
+* **Value**: Captures localized co-listening (e.g. Japanese City Pop & J-Rock in `jp`, Latin Urbano in `co` and `pr`, Afrofusion in `ng`, UK Drill in `gb`).
+* Each country chart acts as a high-density regional playlist containing 200 verified Spotify tracks.
+
+#### Bipartite Normalization & Graph Connectivity Safeguards
+1. **Type-Safe Playlist IDs**:
+   All playlist IDs are strictly cast to prefixed strings (`f"sp_{pl_id}"`, `f"yt_{pl_id}"`, `f"kw_{pl_id}"`) to prevent Python sorting errors (`TypeError: '<' not supported between instances of 'str' and 'int'`).
+2. **Robust Track-to-Catalog Name Matching**:
+   * For Spotify Embeds and Charts: Direct match on 22-char `spotify_id` first.
+   * For YouTube Music strings:
+     1. Unicode normalize using `unicodedata.normalize('NFKD', s)`.
+     2. Lowercase and strip punctuation (`.`, `-`, `'`, `"`).
+     3. Split multi-artist track tags by standard collaboration delimiters (`,`, `&`, `feat.`, `ft.`, `with`, `prod.`), preserving recognized band names (e.g. *"Earth, Wind & Fire"*).
+     4. Match exclusively via exact whole-token equality against the catalog name index. **Never use substring containment** (prevents *"Future"* matching *"Future Islands"*).
+3. **Orphan Node Prevention**:
+   Any artist harvested in Step 0 that fails to achieve at least 3 co-occurrences across the harvested playlists is pruned from `artists_catalog.json` before Step 2. This guarantees $0\%$ unpositioned nodes stacking at $(0, 0)$ in the WebGL canvas.
+
+---
+
+## 4. Downstream Pipeline Mathematical Alignment
+
+### 4.1 Step 2: Co-Occurrence Matrix (`02_build_cooccurrence.py`)
+From the set of bipartite pairs $\mathcal{B} = \{(p_i, a_j)\}$, construct the binary affiliation matrix $B \in \{0, 1\}^{M \times N}$, where $M$ is total playlists and $N$ is catalog artists.
+
+The artist co-occurrence matrix $C \in \mathbb{N}^{N \times N}$ is computed via sparse matrix multiplication:
+$$C = B^T B, \quad C_{jk} = \sum_{i=1}^M B_{ij} B_{ik}$$
+
+### 4.2 Step 3: PMI Normalization & Sparsification (`03_normalize_and_sparsify.py`)
+Raw co-occurrence is heavily biased toward mega-artists. We normalize using **Positive Pointwise Mutual Information (PPMI)**:
+$$\text{PMI}(a_j, a_k) = \log_2 \left( \frac{P(a_j, a_k)}{P(a_j) P(a_k)} \right) = \log_2 \left( \frac{C_{jk} \cdot M}{C_{jj} \cdot C_{kk}} \right)$$
+$$\text{PPMI}(a_j, a_k) = \max\left(0, \text{PMI}(a_j, a_k) - \log_2(T)\right)$$
+
+**Adaptive $k$-NN Sparsification**:
+To ensure cosmic web clustering and avoid visual hairballs:
+* Retain the top $k = 12$ mutual nearest neighbors per artist.
+* Retain all edges with $\text{PPMI} > \tau_{\text{global}}$.
+* Verify giant component connectivity ($|\mathcal{V}_{\text{giant}}| / N > 0.98$).
+
+### 4.3 Step 4: Raw Apple iTunes Genre Grouping (`04_community_detection.py`)
+* Artists are grouped strictly by their raw Apple iTunes API `primaryGenreName` output.
+* Zero hardcoding, zero quotas, and zero heuristic genre mapping.
+* Each unique raw genre is assigned a distinctive color from an expanded, vibrant palette.
+
+### 4.4 Step 5: Natural ForceAtlas2 Spatial Optimization (`05_layout_forceatlas2.py`)
+To produce the natural, organic cosmic web from commit `691cd95` without artificial circular boundary constraints:
+- **Stage 1 (LinLog Macro Spreading)**: ForceAtlas2 LinLog attraction (`linLogMode=True`, `scalingRatio=6.5`, `gravity=0.35`, `edgeWeightInfluence=1.0`, `strongGravityMode=False`) clusters naturally related peers and spreads distant genres into an organic topography with real bays and straits.
+- **Stage 2 (Local Refinement & Anti-Collision)**: ForceAtlas2 local refinement (`linLogMode=False`, `adjustSizes=True`, `scalingRatio=24.0`, `gravity=0.15`, `edgeWeightInfluence=0.6`) accounts for physical node size footprints to prevent overlap.
+- **Stage 3 (Pairwise Spacing Relaxation)**: Pairwise distance relaxation with `min_dist=28.0px` ensures clean breathing room between neighboring artists.
+- Coordinates normalized to expanded galactic canvas `[-1350.0, 1350.0]`.
+- **Zero Circular Constraints**: No circular harmonic angle seeding, no artificial radial jitter, and no `strongGravityMode` spherical forcing.
+
+### 4.5 Step 6: Multi-Tier Metadata Hydration (`06_hydrate_metadata.py`)
+Because the Spotify Web API is locked behind HTTP 403, media assets are hydrated using a resilient multi-tier fallback:
+1. **Tier 1 (Spotify CDN)**: High-res artwork (640x640) and official 30-second MP3 audio preview captured directly during Step 1 Spotify Embed harvesting.
+2. **Tier 2 (Deezer Artist Search)**: High-resolution portrait photograph via open endpoint `https://api.deezer.com/search/artist?q={name}`.
+3. **Tier 3 (Apple iTunes Search)**: Guaranteed 256kbps AAC audio preview stream and 600x600 artwork via `https://itunes.apple.com/search?term={name}&entity=song`.
+4. **Persistent Cache**: All hydrated metadata cached to `pipeline/output/artist_metadata_cache.json`.
+
+### 4.6 Step 7: Web Artifacts Export (`07_export_web_artifacts.py`)
+* **Headliner Threshold**: Dynamic top 5% of nodes by empirical Monthly Listeners (e.g., top 50 nodes for $N=1,000$).
+* **Format**: Exports `web/public/data/atlas-graph.json` strictly compliant with Sigma.js WebGL and React state schema.
+
+---
+
+## 5. File Deprecation & Cleanup Plan
+
+To honor the zero-hardcoding mandate, the following files and routines are permanently decommissioned:
+
+1. **Delete**: [`pipeline/artist_catalog.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/artist_catalog.py) (legacy seed dictionary).
+2. **Delete**: [`pipeline/expand_catalog.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/expand_catalog.py) (legacy 550 hardcoded catalog).
+3. **Refactor**: [`pipeline/01_data_source.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/01_data_source.py)
+   * Remove `ADDITIONAL_ARTISTS` in-memory list.
+   * Remove `generate_high_fidelity_playlists()` procedural generator.
+   * Implement the Multi-Vector Public Playlist Harvester (Vectors A, B, C).
+4. **Create**: `pipeline/00_harvest_artists.py`
+   * Implement Kworb Spotify 2,500 index scraping + Apple iTunes genre taxonomy.
+5. **Update**: [`pipeline/run_pipeline.py`](file:///G:/Other%20computers/Leon%20PC/_CODE/music%20atlas/pipeline/run_pipeline.py)
+   * Add Step 0 (`00_harvest_artists.py`) as the foundational stage of pipeline execution.
+
+---
+
+## 6. Execution Verification Protocol
+
+1. **Phase 1: Catalog Harvesting (`00_harvest_artists.py`)**
+   * Execute: `python pipeline/00_harvest_artists.py --target 1000`
+   * Verification: Confirm `pipeline/output/artists_catalog.json` contains 1,000 artists with valid `spotify_id`, verified `monthly_listeners > 0`, and balanced macro-genre tags across all 11 sectors.
+2. **Phase 2: Playlist Crawling & Edge Mapping (`01_data_source.py`)**
+   * Execute: `python pipeline/01_data_source.py`
+   * Verification: Confirm >1,200 real playlists parsed and >250,000 pairs written to `playlist_artist_pairs.json`. Confirm zero orphan nodes.
+3. **Phase 3: End-to-End Pipeline Run**
+   * Execute: `python pipeline/run_pipeline.py`
+   * Verification: Confirm all 8 stages execute without errors in under 3 minutes.
+4. **Phase 4: Frontend WebGL Verification**
+   * Start Vite dev server: `npm run dev` in `web/`.
+   * Open browser to verify:
+     * Sigma.js renders 1,000 nodes without overlap or (0,0) black holes.
+     * Dynamic Minimap tracks viewport accurately.
+     * Clicking an artist opens `ArtistDrawer.tsx` showing valid Monthly Listeners, portrait photo, and functional audio preview playback.

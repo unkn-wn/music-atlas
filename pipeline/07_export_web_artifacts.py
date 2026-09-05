@@ -61,9 +61,10 @@ def main():
             "crossoverPercent": pct_dst
         })
 
-    # Sort each artist's crossovers descending by percentage
+    # Sort each artist's crossovers descending by sharedPlaylists and cosineSimilarity, keeping top 10
     for a_id in neighbors_by_artist:
-        neighbors_by_artist[a_id].sort(key=lambda x: x["crossoverPercent"], reverse=True)
+        neighbors_by_artist[a_id].sort(key=lambda x: (x["sharedPlaylists"], x["cosineSimilarity"]), reverse=True)
+        neighbors_by_artist[a_id] = neighbors_by_artist[a_id][:10]
 
     import math
 
@@ -112,6 +113,7 @@ def main():
             "continentName": comm_info["continentName"],
             "popularity": pop,
             "followers": followers,
+            "monthlyListeners": followers,
             "image": meta.get("image", ""),
             "previewUrl": meta.get("previewUrl", ""),
             "topTrack": meta.get("topTrack", ""),

@@ -45,13 +45,25 @@ export const App: React.FC = () => {
     }
   };
 
+  // Global Escape key shortcut to close drawer and reset view
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedArtistId(null);
+        canvasRef.current?.resetView();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   if (loading) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center">
           <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing 550+ artists across bridges...</p>
+          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing 800+ dynamic artists across streaming playlists...</p>
         </div>
       </div>
     );
@@ -194,8 +206,8 @@ export const App: React.FC = () => {
               <strong>Music Atlas</strong> is a 2D spatial network visualization of the global music streaming landscape, modeled directly after the iconic <strong>Twitch Atlas</strong>.
             </p>
             <ul className="text-xs text-slate-300 space-y-2 mb-6 list-disc pl-4 font-normal">
-              <li><strong>Constellations (Nodes):</strong> 550+ landmark artists sized strictly proportional to follower reach across the galaxy.</li>
-              <li><strong>Spiderweb Filaments (Edges):</strong> Inward-curved crossover bridges connecting genres and communities into an interconnected web.</li>
+              <li><strong>Constellations (Nodes):</strong> 800+ dynamically harvested artists sized strictly proportional to monthly listeners across the galaxy.</li>
+              <li><strong>Spiderweb Filaments (Edges):</strong> Inward-curved crossover bridges connecting genres and communities from live public streaming playlists.</li>
               <li><strong>Focus Mode:</strong> Clicking any artist illuminates their direct neighborhood in genre color with shared playlist crossover percentages.</li>
               <li><strong>Audio Discovery:</strong> 30-second streaming audio previews powered by live iTunes search integration.</li>
             </ul>

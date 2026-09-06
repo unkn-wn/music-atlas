@@ -29,6 +29,7 @@ import numpy as np
 import networkx as nx
 import fa2
 from scipy.spatial import cKDTree
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -300,7 +301,7 @@ def main():
     continents = []
     artist_continent_map = {}
 
-    for idx, (comm, g_counter) in enumerate(zip(communities, comm_genre_counts), start=1):
+    for idx, (comm, g_counter) in enumerate(tqdm(zip(communities, comm_genre_counts), total=len(communities), desc="Stage 4C: Continents TF-IDF", unit="continent"), start=1):
         color = CONTINENT_PALETTE[(idx - 1) % len(CONTINENT_PALETTE)]
         total_genres_in_comm = sum(g_counter.values()) or 1
 
@@ -335,14 +336,14 @@ def main():
         })
 
         for a_id in sorted_members:
-            raw_primary = catalog_map.get(a_id, {}).get("primaryGenre") or title.split(" / ")[0]
+            raw_primary = catalog_map.get(a_id, {}).get("primaryGenre") or "Other"
             artist_continent_map[a_id] = {
                 "continentId": idx,
                 "continentName": title,
                 "communityId": idx,
                 "communityName": title,
                 "color": color,
-                "primaryGenre": format_genre_name(raw_primary)
+                "primaryGenre": raw_primary
             }
 
     print("\nFormed Macro-Continents:")

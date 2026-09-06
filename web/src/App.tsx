@@ -30,11 +30,11 @@ export const App: React.FC = () => {
   const drawerArtist = selectedArtist;
 
   // Handlers with React 19 transition for non-blocking UI
-  const handleSelectArtist = (id: string | null) => {
+  const handleSelectArtist = (id: string | null, shouldFly: boolean = false) => {
     startTransition(() => {
       setSelectedArtistId(id);
     });
-    if (id && canvasRef.current) {
+    if (id && shouldFly && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
   };
@@ -115,7 +115,7 @@ export const App: React.FC = () => {
         <div className="pointer-events-auto flex-1 max-w-sm sm:max-w-md">
           <SearchBar
             nodes={data.nodes}
-            onSelectArtist={handleSelectArtist}
+            onSelectArtist={(artistId) => handleSelectArtist(artistId, true)}
             selectedArtistId={selectedArtistId}
           />
         </div>

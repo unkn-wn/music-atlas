@@ -13,6 +13,7 @@ import json
 import time
 import numpy as np
 import scipy.sparse as sp
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -56,7 +57,7 @@ def main():
     col_ind = []
     valid_playlists_count = 0
 
-    for p_idx, pl in enumerate(playlists):
+    for p_idx, pl in enumerate(tqdm(playlists, desc="Stage 4A: Bipartite Projection", unit="pl")) :
         seen_artists_in_pl = set()
         for t in pl.get("tracks", []):
             a_id = t.get("artist_id")

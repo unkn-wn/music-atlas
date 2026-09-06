@@ -48,6 +48,8 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
     return list.filter((g) => g && g.toLowerCase() !== 'eclectic' && g.toLowerCase() !== 'other');
   }, [artist.topSubgenres, artist.genres]);
 
+  const hasPreview = Boolean(artist.previewUrl);
+
   return (
     <div className="glass-panel w-80 sm:w-96 shadow-2xl flex flex-col h-[calc(100vh-6rem)] overflow-hidden pointer-events-auto border-l border-white/15 animate-in slide-in-from-right duration-300">
       {/* Header Image & Close Button */}
@@ -88,9 +90,22 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
         {/* Quick Play Floating Button */}
         <button
-          onClick={() => onTogglePreview(artist)}
-          className="absolute bottom-3 right-4 p-3 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold shadow-lg shadow-emerald-500/30 transition-transform active:scale-95 flex items-center justify-center"
-          title={`Play 30s Audio Preview: ${artist.label}`}
+          onClick={() => {
+            if (hasPreview) onTogglePreview(artist);
+          }}
+          disabled={!hasPreview}
+          className={`absolute bottom-3 right-4 p-3 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center ${
+            hasPreview
+              ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
+              : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
+          }`}
+          title={
+            !hasPreview
+              ? "No audio preview available"
+              : isCurrentPlaying
+              ? `Pause Preview: ${artist.label}`
+              : `Play 30s Audio Preview: ${artist.label}`
+          }
         >
           {isCurrentPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
         </button>
@@ -107,7 +122,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                 style={{ backgroundColor: artist.color }}
               />
               <span className="text-xs font-semibold text-slate-200">
-                {artist.continentName || artist.primaryGenre || 'Artist'}
+                {artist.primaryGenre || 'Artist'}
               </span>
             </div>
             {subgenres.length > 0 && (

@@ -108,7 +108,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       {isOpen && filteredArtists.length > 0 && (
         <div className="absolute left-0 right-0 top-full mt-2 glass-panel p-1.5 shadow-2xl z-50 max-h-96 overflow-y-auto border border-white/20">
           {filteredArtists.map((artist) => {
-            const subtitle = `${artist.continentName || artist.primaryGenre} • ${artist.topSubgenres?.[0] || 'Artist'}`;
+            const subtitle = `${artist.primaryGenre || artist.continentName || 'Artist'} • ${artist.topSubgenres?.[0] || 'Artist'}`;
 
             return (
               <button

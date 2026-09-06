@@ -41,7 +41,20 @@ def main():
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; use disk cache & local snapshots")
     parser.add_argument("--skip-harvest", action="store_true", help="Skip Stage 1 and 2 network crawling; rebuild graph from cached data")
     parser.add_argument("--fast-layout", action="store_true", help="Run accelerated layout iterations for fast builds (~30s)")
+    parser.add_argument("--fresh", action="store_true", help="Start fresh by clearing checkpoints and re-harvesting all genres")
+    parser.add_argument("--clear-cache", action="store_true", help="Wipe all intermediate output files in pipeline/output/ before running")
     args = parser.parse_args()
+
+    OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
+    if args.clear_cache and os.path.exists(OUTPUT_DIR):
+        print("Clearing cached output files in pipeline/output/...")
+        for fname in os.listdir(OUTPUT_DIR):
+            fpath = os.path.join(OUTPUT_DIR, fname)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
 
     print("=" * 75)
     print(f" STARTING EXPANDED AUTONOMOUS MUSIC ATLAS PIPELINE (Tier {args.tier})")
@@ -66,6 +79,8 @@ def main():
             cmd.extend(["--playlists-per-genre", str(args.playlists_per_genre)])
             if args.offline:
                 cmd.extend(["--limit-genres", "0"])
+            if args.fresh:
+                cmd.append("--fresh")
         elif idx == 3:
             if args.offline:
                 cmd.append("--offline")
@@ -73,18 +88,12 @@ def main():
             if args.fast_layout:
                 cmd.extend(["--iter-macro", "120", "--iter-micro", "60"])
 
-        res = subprocess.run(cmd, cwd=PIPELINE_DIR, capture_output=True, text=True, encoding="utf-8")
+        res = subprocess.run(cmd, cwd=PIPELINE_DIR)
 
         if res.returncode != 0:
-            print(f"\nERROR in {script}:")
-            if res.stderr:
-                print(res.stderr)
-            if res.stdout:
-                print(res.stdout)
+            print(f"\nERROR in {script} (exit code {res.returncode})")
             sys.exit(1)
         else:
-            if res.stdout:
-                print(res.stdout.strip())
             print(f"[Step {idx}/7] Done in {time.time() - step_start:.2f}s")
 
     print("\n" + "=" * 75)

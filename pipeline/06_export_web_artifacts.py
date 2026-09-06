@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Set, Any
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -154,7 +155,7 @@ def main():
 
     # 3. Assemble Nodes
     nodes = []
-    for a_id, meta in catalog_map.items():
+    for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes", unit="node"):
         pos = coords.get(a_id, {"x": 0.0, "y": 0.0})
         comm_info = artist_continent_map.get(a_id, {
             "continentId": 1,
@@ -196,7 +197,7 @@ def main():
             "monthlyListeners": subs,
             "subscribers": subs,
             "subscribersFormatted": meta.get("subscribersFormatted", f"{subs:,}"),
-            "primaryGenre": comm_info.get("primaryGenre", meta.get("primaryGenre", "Other")),
+            "primaryGenre": meta.get("primaryGenre") or comm_info.get("primaryGenre", "Other"),
             "macroGenre": comm_info.get("continentName", meta.get("primaryGenre", "Other")),
             "genres": meta.get("topSubgenres", meta.get("genres", [])),
             "topSubgenres": meta.get("topSubgenres", []),
@@ -210,7 +211,7 @@ def main():
 
     # 4. Assemble Edges with Radial Bézier Inward Deflection (Spiderweb Effect)
     formatted_edges = []
-    for idx, e in enumerate(edges):
+    for idx, e in enumerate(tqdm(edges, desc="Stage 5: Deflecting Edges", unit="edge")):
         src = e["source"]
         dst = e["target"]
         if src not in catalog_map or dst not in catalog_map:

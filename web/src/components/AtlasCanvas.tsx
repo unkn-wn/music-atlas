@@ -348,7 +348,10 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         context.lineWidth = Math.max(2.0, radius * 0.08);
         context.stroke();
 
-        const labelText = data.label || data.originalLabel;
+        // Only draw hover text if the node does not already have a visible label rendered
+        if (data.label) return;
+
+        const labelText = data.originalLabel || '';
         if (!labelText) return;
         const size = settings.labelSize || 12;
         const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
@@ -580,12 +583,16 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const isIncidentToSelected = (src === selectedNodeId && neighborIds.has(dst)) || (dst === selectedNodeId && neighborIds.has(src));
 
         if (isIncidentToSelected) {
+          const isCrossContinent = Boolean(cached && cached.srcCont !== cached.dstCont);
+          const isBridge = cached ? cached.isBridge : Boolean(data.isBridge);
+          const isDistantCrossover = isBridge || isCrossContinent;
+
           return {
             ...data,
             hidden: false,
-            color: selectedArtistColor,
-            size: Math.max(0.6, (cached ? cached.size : 1) * 0.85),
-            zIndex: 10
+            color: isDistantCrossover ? hexToRgba(selectedArtistColor, 0.35) : selectedArtistColor,
+            size: isDistantCrossover ? 0.35 : Math.max(0.6, (cached ? cached.size : 1) * 0.85),
+            zIndex: isDistantCrossover ? 6 : 10
           };
         } else {
           return {

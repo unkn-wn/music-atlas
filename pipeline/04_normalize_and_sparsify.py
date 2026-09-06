@@ -20,6 +20,7 @@ import scipy.sparse as sp
 from scipy.sparse.csgraph import connected_components
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -83,7 +84,7 @@ def main():
     candidates = defaultdict(list)
     all_scored_edges = {}
 
-    for i in range(num_artists):
+    for i in tqdm(range(num_artists), desc="Stage 4B: Cosine Normalization", unit="artist"):
         c_i = marginals[i]
         if c_i <= 0:
             continue
@@ -251,27 +252,10 @@ def main():
                     if bridges_added >= 3:
                         break
 
-        # If still no semantic match, connect to diverse members of GCC by matching primary genre
-        if bridges_added < 3:
-            gcc_sample = list(gcc_nodes)
-            for u in members[:3]:
-                u_id = idx_to_artist[u]
-                u_genre = artist_primary_genres.get(u_id, "Pop").lower()
-                candidates_in_gcc = [v for v in gcc_sample if artist_primary_genres.get(idx_to_artist[v], "").lower() == u_genre]
-                if not candidates_in_gcc:
-                    candidates_in_gcc = gcc_sample
-                v = candidates_in_gcc[u % len(candidates_in_gcc)]
-                pair = (min(u, v), max(u, v))
-                if pair not in final_edges:
-                    final_edges.add(pair)
-                    edge_data_map[pair] = (0.12, 1.0)
-                    bridge_edges.add(pair)
-                    bridges_added += 1
-                if bridges_added >= 3:
-                    break
-
-        surviving_nodes.update(members)
-        gcc_nodes.update(members)
+        # If bridges were added via co-occurrence or semantic similarity, incorporate members into surviving GCC
+        if bridges_added > 0:
+            surviving_nodes.update(members)
+            gcc_nodes.update(members)
 
     # Filter out pruned nodes and retain strictly surviving nodes in final edges
     final_edges = {e for e in final_edges if e[0] in surviving_nodes and e[1] in surviving_nodes}

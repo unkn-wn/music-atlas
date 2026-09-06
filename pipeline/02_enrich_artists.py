@@ -26,6 +26,7 @@ from collections import Counter
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -188,39 +189,41 @@ def query_youtube_channel(name: str, client: httpx.Client, max_retries: int = 2)
                             "subscribers": subs,
                             "image": avatar_url,
                             "channelTitle": title,
-                            "channelId": c.get("channelId", "")
+                            "channelId": c.get("channelId", ""),
+                            "is_oac": is_oac
                         }
                 break
             elif resp.status_code == 429:
-                time.sleep(2.0 * (attempt + 1))
+                time.sleep(15.0 * (attempt + 1))
         except Exception:
             time.sleep(0.3)
     return None
 
-def query_itunes(name: str, client: httpx.Client, max_retries: int = 3) -> dict | None:
+def query_itunes(name: str, client: httpx.Client, max_retries: int = 4) -> dict | None:
     """Queries Apple iTunes Search API for 30s previewUrl, topTrack, 600px artwork, and genre."""
     url = "https://itunes.apple.com/search"
-    params = {"term": name, "entity": "song", "limit": 5}
+    params = {"term": name, "entity": "song", "limit": 25}
+    target_name = name.lower().strip()
+
     for attempt in range(max_retries):
         try:
-            resp = client.get(url, params=params, timeout=5.0)
+            resp = client.get(url, params=params, timeout=6.0)
             if resp.status_code == 200:
                 results = resp.json().get("results", [])
-                target_name = name.lower().strip()
-                # Pass 1: Strict exact match
+                # Pass 1: Strict exact match with valid audio preview
                 for r in results:
                     art_name = r.get("artistName", "").strip().lower()
-                    if art_name == target_name:
+                    if art_name == target_name and r.get("previewUrl"):
                         return {
                             "topTrack": r.get("trackName", ""),
                             "previewUrl": r.get("previewUrl", ""),
                             "image": r.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
                             "primaryGenre": r.get("primaryGenreName", "")
                         }
-                # Pass 2: Word-bounded collaboration match (e.g. "Daft Punk feat. Pharrell")
+                # Pass 2: Word-bounded collaboration match with valid audio preview
                 for r in results:
                     art_name = r.get("artistName", "").strip().lower()
-                    if re.search(rf'\b{re.escape(target_name)}\b', art_name):
+                    if re.search(rf'\b{re.escape(target_name)}\b', art_name) and r.get("previewUrl"):
                         return {
                             "topTrack": r.get("trackName", ""),
                             "previewUrl": r.get("previewUrl", ""),
@@ -229,23 +232,42 @@ def query_itunes(name: str, client: httpx.Client, max_retries: int = 3) -> dict 
                         }
                 break
             elif resp.status_code == 429:
-                time.sleep(1.0 * (attempt + 1))
+                cooldown = 15.0 * (attempt + 1) + random.uniform(1.0, 3.0)
+                print(f"  iTunes 429 rate limit for '{name}'. Cooldown {cooldown:.1f}s before retry {attempt + 1}/{max_retries}...")
+                time.sleep(cooldown)
         except Exception:
-            time.sleep(0.2)
+            time.sleep(0.3)
 
-    # Fallback to musicArtist entity if no exact song found
+    # Fallback to musicArtist entity if no exact song found in top 25 (e.g. Creo, Michael Jackson)
     try:
-        resp = client.get(url, params={"term": name, "entity": "musicArtist", "limit": 3}, timeout=4.0)
+        resp = client.get(url, params={"term": name, "entity": "musicArtist", "limit": 5}, timeout=5.0)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             for r in results:
                 art_name = r.get("artistName", "").strip().lower()
-                if art_name == name.lower().strip():
+                if art_name == target_name:
+                    artist_id = r.get("artistId")
+                    genre_name = r.get("primaryGenreName", "")
+                    if artist_id:
+                        try:
+                            lookup_resp = client.get("https://itunes.apple.com/lookup", params={"id": artist_id, "entity": "song", "limit": 10}, timeout=5.0)
+                            if lookup_resp.status_code == 200:
+                                lookup_results = lookup_resp.json().get("results", [])
+                                for tr in lookup_results:
+                                    if tr.get("wrapperType") == "track" and tr.get("previewUrl"):
+                                        return {
+                                            "topTrack": tr.get("trackName", ""),
+                                            "previewUrl": tr.get("previewUrl", ""),
+                                            "image": tr.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
+                                            "primaryGenre": tr.get("primaryGenreName") or genre_name
+                                        }
+                        except Exception:
+                            pass
                     return {
                         "topTrack": "",
                         "previewUrl": "",
                         "image": "",
-                        "primaryGenre": r.get("primaryGenreName", "")
+                        "primaryGenre": genre_name
                     }
     except Exception:
         pass
@@ -316,7 +338,7 @@ def main():
 
     # 4. Compute Top 3 Subgenres per candidate artist
     artist_top_subgenres = {}
-    for a in surviving_artists:
+    for a in tqdm(surviving_artists, desc="Stage 3: Subgenre Resolution", unit="artist"):
         a_occ = occurrences.get(a, {})
         scores = []
         for g, count in a_occ.items():
@@ -370,6 +392,7 @@ def main():
         def resolve_artist_metadata(name: str):
             c_meta = cache.get(name) or cache.get(name.lower()) or {}
             subs = c_meta.get("subscribers", 0)
+            is_oac = c_meta.get("is_oac", False)
             avatar_url = c_meta.get("image", "") if "d41d8cd98f00b204e9800998ecf8427e" not in c_meta.get("image", "") else ""
             preview_url = c_meta.get("preview_url", "") or artist_harvested_preview.get(name, "")
             top_track = c_meta.get("topTrack") or c_meta.get("top_track", "")
@@ -383,17 +406,19 @@ def main():
                         subs = yt_res["subscribers"]
                     if not avatar_url and yt_res.get("image"):
                         avatar_url = yt_res["image"]
+                    if yt_res.get("is_oac"):
+                        is_oac = True
                 time.sleep(random.uniform(0.15, 0.35))
 
             # 2. Apple iTunes Lookup for top track, verified 30s AAC preview, artwork, and primary genre
             if not itunes_genre or not preview_url or not top_track or not avatar_url:
                 itunes_res = query_itunes(name, http_client)
                 if itunes_res:
-                    if not top_track and itunes_res.get("topTrack"):
+                    if itunes_res.get("topTrack") and itunes_res.get("previewUrl"):
+                        # Atomic update: sample and song title are locked to the exact same track
                         top_track = itunes_res["topTrack"]
-                    if not preview_url and itunes_res.get("previewUrl"):
                         preview_url = itunes_res["previewUrl"]
-                    if not itunes_genre and itunes_res.get("primaryGenre"):
+                    if itunes_res.get("primaryGenre"):
                         itunes_genre = itunes_res["primaryGenre"]
                     if not avatar_url and itunes_res.get("image"):
                         avatar_url = itunes_res["image"]
@@ -406,6 +431,7 @@ def main():
 
             return name, {
                 "subscribers": subs,
+                "is_oac": is_oac,
                 "primaryGenre": final_primary,
                 "preview_url": preview_url,
                 "topTrack": top_track,
@@ -413,18 +439,18 @@ def main():
             }
 
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            completed = 0
+            pbar = tqdm(total=len(artists_to_lookup), desc="Stage 3: Hydrating Artists", unit="artist")
             for a_name, meta in executor.map(resolve_artist_metadata, artists_to_lookup):
                 cache[a_name] = meta
-                completed += 1
-                if completed % 25 == 0 or completed == len(artists_to_lookup):
-                    print(f"  Hydration Progress: [{completed}/{len(artists_to_lookup)}] resolved ({sum(1 for a in cache.values() if a.get('subscribers', 0) > 0)} with authentic subscribers).")
+                pbar.update(1)
+                if pbar.n % 25 == 0 or pbar.n == len(artists_to_lookup):
                     save_metadata_cache(cache)
+            pbar.close()
 
     catalog = []
     surviving_ids = []
     try:
-        for idx, a_name in enumerate(sorted_candidates):
+        for idx, a_name in enumerate(tqdm(sorted_candidates, desc="Stage 3: Assembling Catalog", unit="artist")):
             c_i = artist_playlist_counts[a_name]
             top_subg = artist_top_subgenres.get(a_name, [])
             valid_subg = [s for s in top_subg if s.lower().strip() not in NON_MUSICAL_AUDIO_TOKENS]
@@ -435,8 +461,14 @@ def main():
             a_id = artist_canonical_id.get(a_name, f"artist_{idx}")
 
             subs = cached_meta.get("subscribers", 0)
-            # Upstream Pruning Rule: Strictly prune unverified artists lacking authentic subscribers
+            is_oac = cached_meta.get("is_oac", False)
+            has_itunes_music = bool(cached_meta.get("preview_url") or cached_meta.get("topTrack") or is_valid_cached)
+
+            # Upstream Pruning Rule: Strictly prune unverified entities lacking authentic subscribers
+            # and non-artist channels lacking music catalogue verification
             if subs <= 0:
+                continue
+            if not is_oac and not has_itunes_music:
                 continue
 
             top_track = cached_meta.get("topTrack") or cached_meta.get("top_track", "")

@@ -16,6 +16,7 @@ import html
 import argparse
 import time
 import httpx
+from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -71,7 +72,8 @@ NON_MUSICAL_AUDIO_TOKENS = {
 
 def parse_genres_from_html(html_text: str) -> list[dict]:
     genres = []
-    for row in html_text.split("</tr>"):
+    rows = html_text.split("</tr>")
+    for row in tqdm(rows, desc="Parsing Genres", unit="row", leave=False):
         m = ROW_REGEX.search(row)
         if m:
             rank_str, genre_name = m.groups()

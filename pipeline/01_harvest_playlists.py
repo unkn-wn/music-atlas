@@ -39,6 +39,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 from ytmusicapi import YTMusic
+from tqdm import tqdm
 from sanitizer import sanitize_artist_name, split_artist_names
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -266,6 +267,13 @@ def main():
 
     if args.fresh:
         playlists, occurrences, seen_authors, completed_genres = [], {}, {}, set()
+        for fpath in [STATE_FILE, PLAYLISTS_FILE, OCCURRENCES_FILE]:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+        print("Fresh run requested: Cleared previous harvesting checkpoints.")
     else:
         playlists, occurrences, seen_authors, completed_genres = load_checkpoint()
 
@@ -308,10 +316,13 @@ def main():
     genres_processed_in_run = 0
     completed_genre_list = list(completed_genres)
 
-    for g_idx, g_info in enumerate(genres_data):
+    genre_pbar = tqdm(genres_data, desc="Stage 2: Crawling Playlists", unit="genre")
+    for g_idx, g_info in enumerate(genre_pbar):
         genre = g_info["genre"]
         if genre in completed_genres:
             continue
+
+        genre_pbar.set_postfix({"genre": genre[:16], "total_pl": len(playlists)})
 
         search_queries = [
             g_info.get("primary_query", f"{genre} playlist"),
@@ -326,21 +337,25 @@ def main():
         for q in search_queries:
             if len(candidates) >= args.playlists_per_genre:
                 break
-            try:
-                pace_request()
-                needed_cands = max(10, args.playlists_per_genre - len(candidates))
-                results = yt.search(q, filter="playlists", limit=needed_cands)
-                for item in results or []:
-                    bid = item.get("browseId")
-                    if bid and bid not in seen_cand_ids and bid not in existing_playlist_ids:
-                        candidates.append(item)
-                        seen_cand_ids.add(bid)
-            except Exception as e:
-                err_str = str(e).lower()
-                if "429" in err_str or "quota" in err_str:
-                    print(f"  YTM 429 rate limit hit at genre '{genre}'. Backing off for 15s...")
-                    time.sleep(15.0)
-                break
+            for retry in range(3):
+                try:
+                    pace_request()
+                    needed_cands = max(10, args.playlists_per_genre - len(candidates))
+                    results = yt.search(q, filter="playlists", limit=needed_cands)
+                    for item in results or []:
+                        bid = item.get("browseId")
+                        if bid and bid not in seen_cand_ids and bid not in existing_playlist_ids:
+                            candidates.append(item)
+                            seen_cand_ids.add(bid)
+                    break
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "429" in err_str or "quota" in err_str or "rate" in err_str:
+                        cooldown = 15.0 * (2 ** retry) + random.uniform(1.0, 5.0)
+                        print(f"  YTM rate limit hit for query '{q}'. Cooldown {cooldown:.1f}s before retry {retry + 1}/3...")
+                        time.sleep(cooldown)
+                    else:
+                        break
 
         accepted_for_genre = 0
         for cand in candidates:
@@ -374,11 +389,23 @@ def main():
             if seen_authors.get(author_id, 0) >= 2:
                 continue
 
-            # 3. Full Tracklist Ingestion
-            try:
-                pace_request()
-                pl_details = yt.get_playlist(browse_id, limit=150)
-            except Exception:
+            # 3. Full Tracklist Ingestion with rate limit retry
+            pl_details = None
+            for retry in range(3):
+                try:
+                    pace_request()
+                    pl_details = yt.get_playlist(browse_id, limit=150)
+                    break
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "429" in err_str or "quota" in err_str or "rate" in err_str:
+                        cooldown = 15.0 * (2 ** retry) + random.uniform(1.0, 5.0)
+                        print(f"  YTM rate limit on playlist {browse_id}. Cooldown {cooldown:.1f}s before retry {retry + 1}/3...")
+                        time.sleep(cooldown)
+                    else:
+                        break
+
+            if not pl_details:
                 continue
 
             raw_tracks = pl_details.get("tracks", [])

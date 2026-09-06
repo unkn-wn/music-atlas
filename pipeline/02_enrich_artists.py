@@ -4,12 +4,13 @@ Implements:
 1. Strict Artist Sanitization (Unicode safe, rejects dates, handles, view counts)
 2. Artist Survival Rule: Retain artists appearing in >= 2 surviving playlists (c_i >= 2)
 3. IDF-Weighted Specificity Scoring to extract Top 3 Distinct Subgenres (Title Case)
-4. Zero "Pop" bias: primaryGenre is strictly the #1 empirical subgenre (no hardcoded "Pop")
-5. Guaranteed high-res portraits: YTM 512px + Deezer 1000px artist photography + iTunes 600px
-6. Universal Empirical Sizing via YouTube Music public subscriber counts
-7. Tri-Vector 30s Audio Previews (iTunes M4A / Deezer MP3 / Spotify CDN)
-8. Complete removal of 'topTrack' / 'Featured Track'
+4. Zero "Pop" bias: primaryGenre is strictly the #1 empirical subgenre or verified iTunes genre
+5. Guaranteed authentic portraits: YouTube Official Artist Channel (OAC) 512px + iTunes 600px
+6. Universal Empirical Sizing via verified YouTube public subscriber counts (Zero Fake Numbers)
+7. Verified 30s Audio Previews (iTunes AAC / Spotify CDN)
+8. Extraction and persistence of authentic 'topTrack'
 9. Persistent disk caching in pipeline/output/artist_metadata_cache.json
+10. Strict Upstream Pruning of unverified artists
 """
 
 import os
@@ -18,11 +19,12 @@ import json
 import time
 import math
 import re
+import random
 import argparse
-import threading
 from urllib.parse import quote_plus
-from collections import defaultdict, Counter
-from typing import Dict, List, Optional, Tuple, Any
+from collections import Counter
+from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import httpx
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -31,7 +33,6 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from ytmusicapi import YTMusic
 from sanitizer import sanitize_artist_name
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
 OCCURRENCES_FILE = os.path.join(OUTPUT_DIR, "artist_subgenre_occurrences.json")
 CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
+SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 CACHE_FILE = os.path.join(OUTPUT_DIR, "artist_metadata_cache.json")
 
 NON_MUSICAL_AUDIO_TOKENS = {
@@ -50,15 +52,20 @@ NON_MUSICAL_AUDIO_TOKENS = {
 }
 
 def parse_subscribers(sub_str: str) -> int:
-    """Parses subscriber strings like '264K', '50.2M', '980' into exact integers."""
+    """Parses subscriber strings like '264K', '50.2M', '980', '4.38 million' into exact integers."""
     if not sub_str:
         return 0
-    clean = str(sub_str).upper().replace("SUBSCRIBERS", "").strip()
+    clean = str(sub_str).upper().replace("SUBSCRIBERS", "").replace("SUBSCRIBER", "").strip()
     try:
+        if "MILLION" in clean:
+            num = re.findall(r'[\d.]+', clean.replace("MILLION", "").strip())
+            return int(float(num[0]) * 1_000_000) if num else 0
         if "M" in clean:
-            return int(float(clean.replace("M", "").strip()) * 1_000_000)
+            num = re.findall(r'[\d.]+', clean.replace("M", "").strip())
+            return int(float(num[0]) * 1_000_000) if num else 0
         if "K" in clean:
-            return int(float(clean.replace("K", "").strip()) * 1_000)
+            num = re.findall(r'[\d.]+', clean.replace("K", "").strip())
+            return int(float(num[0]) * 1_000) if num else 0
         nums = re.findall(r'\d+', clean)
         return int("".join(nums)) if nums else 0
     except Exception:
@@ -75,13 +82,12 @@ def format_subscribers(subs: int) -> str:
     return str(subs)
 
 def calculate_log_popularity(subs: int) -> int:
-    """Empirical logarithmic popularity scaled to subscribers (20 to 100)."""
+    """Empirical logarithmic popularity scaled to verified subscribers (1 to 100)."""
     if subs <= 0:
-        return 20
-    log_s = math.log10(max(1000, subs))
-    # 1k subs -> ~20, 50M subs (10^7.7) -> ~100
-    val = round(20.0 + 80.0 * (log_s - 3.0) / (7.7 - 3.0))
-    return int(min(100, max(20, val)))
+        return 0
+    log_s = math.log10(max(1, subs))
+    val = round(100.0 * (log_s / 8.0))
+    return int(min(100, max(1, val)))
 
 def upgrade_avatar_url(raw_url: str) -> str:
     """Transforms Google thumbnail URLs to 512px high-res square crops."""
@@ -104,81 +110,153 @@ def load_metadata_cache() -> Dict[str, Dict]:
 def save_metadata_cache(cache: Dict[str, Dict]):
     temp = CACHE_FILE + ".tmp"
     with open(temp, "w", encoding="utf-8") as f:
-        json.dump(cache, f, indent=2)
+        json.dump(cache, f, indent=2, ensure_ascii=False)
     os.replace(temp, CACHE_FILE)
 
-def query_itunes(name: str, client: httpx.Client, max_retries: int = 2) -> Optional[Dict]:
-    """Apple iTunes API lookup for artwork, 30s AAC preview, and official primary genre."""
+def query_youtube_channel(name: str, client: httpx.Client, max_retries: int = 2) -> Optional[Dict]:
+    """
+    YouTube public channel search resolver.
+    Matches Official Artist Channel (BADGE_STYLE_TYPE_VERIFIED_ARTIST) or exact channel title.
+    Extracts authentic subscriber count and high-res Google portrait (upgraded to 512px).
+    """
+    url = f"https://www.youtube.com/results?search_query={quote_plus(name)}&sp=EgIQAg%253D%253D"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
+    for attempt in range(max_retries):
+        try:
+            resp = client.get(url, headers=headers, timeout=6.0)
+            if resp.status_code == 200:
+                m = re.search(r'var ytInitialData = ({.*?});</script>', resp.text)
+                if not m:
+                    break
+                try:
+                    data = json.loads(m.group(1))
+                except Exception:
+                    break
+
+                def find_channel_renderers(obj):
+                    channels = []
+                    if isinstance(obj, dict):
+                        if "channelRenderer" in obj:
+                            channels.append(obj["channelRenderer"])
+                        for v in obj.values():
+                            channels.extend(find_channel_renderers(v))
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            channels.extend(find_channel_renderers(item))
+                    return channels
+
+                renderers = find_channel_renderers(data)
+                for c in renderers:
+                    title = c.get("title", {}).get("simpleText", "")
+                    if not title and c.get("title", {}).get("runs"):
+                        title = "".join(r.get("text", "") for r in c["title"]["runs"])
+                    badges = [b.get("metadataBadgeRenderer", {}).get("style") for b in c.get("ownerBadges", [])]
+                    is_oac = "BADGE_STYLE_TYPE_VERIFIED_ARTIST" in badges
+                    title_clean = title.lower().strip()
+                    target_name = name.lower().strip()
+                    name_match = title_clean == target_name
+                    is_related_oac = is_oac and (target_name in title_clean or title_clean in target_name)
+
+                    if is_related_oac or name_match:
+                        # Extract subscriber count: check subscriberCountText, strictly guarding against video counts
+                        sub_text = ""
+                        for field in ["subscriberCountText", "videoCountText"]:
+                            f_obj = c.get(field, {})
+                            st = f_obj.get("simpleText") or ""
+                            if not st and f_obj.get("runs"):
+                                st = "".join(r.get("text", "") for r in f_obj.get("runs", []))
+                            if not st and f_obj.get("accessibility", {}).get("accessibilityData", {}).get("label"):
+                                st = f_obj["accessibility"]["accessibilityData"]["label"]
+                            st_lower = st.lower()
+                            if "video" in st_lower or "view" in st_lower or "track" in st_lower:
+                                continue
+                            if "sub" in st_lower or "abonn" in st_lower or "suscriptor" in st_lower:
+                                sub_text = st
+                                break
+                            elif not sub_text and st and not st.startswith("@"):
+                                sub_text = st
+
+                        subs = parse_subscribers(sub_text)
+                        thumbs = c.get("thumbnail", {}).get("thumbnails", [])
+                        raw_avatar = thumbs[-1].get("url", "") if thumbs else ""
+                        avatar_url = upgrade_avatar_url(raw_avatar)
+
+                        return {
+                            "subscribers": subs,
+                            "image": avatar_url,
+                            "channelTitle": title,
+                            "channelId": c.get("channelId", "")
+                        }
+                break
+            elif resp.status_code == 429:
+                time.sleep(2.0 * (attempt + 1))
+        except Exception:
+            time.sleep(0.3)
+    return None
+
+def query_itunes(name: str, client: httpx.Client, max_retries: int = 3) -> dict | None:
+    """Queries Apple iTunes Search API for 30s previewUrl, topTrack, 600px artwork, and genre."""
     url = "https://itunes.apple.com/search"
-    params = {"term": name, "entity": "song", "limit": 1}
+    params = {"term": name, "entity": "song", "limit": 5}
     for attempt in range(max_retries):
         try:
             resp = client.get(url, params=params, timeout=5.0)
             if resp.status_code == 200:
                 results = resp.json().get("results", [])
-                if results:
-                    r = results[0]
-                    return {
-                        "previewUrl": r.get("previewUrl", ""),
-                        "image": r.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
-                        "primaryGenre": r.get("primaryGenreName", "")
-                    }
+                target_name = name.lower().strip()
+                # Pass 1: Strict exact match
+                for r in results:
+                    art_name = r.get("artistName", "").strip().lower()
+                    if art_name == target_name:
+                        return {
+                            "topTrack": r.get("trackName", ""),
+                            "previewUrl": r.get("previewUrl", ""),
+                            "image": r.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
+                            "primaryGenre": r.get("primaryGenreName", "")
+                        }
+                # Pass 2: Word-bounded collaboration match (e.g. "Daft Punk feat. Pharrell")
+                for r in results:
+                    art_name = r.get("artistName", "").strip().lower()
+                    if re.search(rf'\b{re.escape(target_name)}\b', art_name):
+                        return {
+                            "topTrack": r.get("trackName", ""),
+                            "previewUrl": r.get("previewUrl", ""),
+                            "image": r.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
+                            "primaryGenre": r.get("primaryGenreName", "")
+                        }
                 break
             elif resp.status_code == 429:
                 time.sleep(1.0 * (attempt + 1))
         except Exception:
             time.sleep(0.2)
 
-    # Fallback to musicArtist entity if song not found
+    # Fallback to musicArtist entity if no exact song found
     try:
-        resp = client.get(url, params={"term": name, "entity": "musicArtist", "limit": 1}, timeout=4.0)
+        resp = client.get(url, params={"term": name, "entity": "musicArtist", "limit": 3}, timeout=4.0)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
-            if results:
-                return {
-                    "previewUrl": "",
-                    "image": "",
-                    "primaryGenre": results[0].get("primaryGenreName", "")
-                }
+            for r in results:
+                art_name = r.get("artistName", "").strip().lower()
+                if art_name == name.lower().strip():
+                    return {
+                        "topTrack": "",
+                        "previewUrl": "",
+                        "image": "",
+                        "primaryGenre": r.get("primaryGenreName", "")
+                    }
     except Exception:
         pass
 
-    return None
-
-def query_deezer_artist(name: str, client: httpx.Client) -> Optional[str]:
-    """Deezer artist endpoint: returns direct high-res artist portrait (1000px)."""
-    url = f"https://api.deezer.com/search/artist?q={quote_plus(name)}&limit=1"
-    try:
-        resp = client.get(url, timeout=4.0)
-        if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            if data:
-                a = data[0]
-                img = a.get("picture_xl") or a.get("picture_big") or a.get("picture_medium") or ""
-                if "d41d8cd98f00b204e9800998ecf8427e" in img:
-                    img = ""
-                return img
-    except Exception:
-        pass
-    return None
-
-def query_deezer_preview(name: str, client: httpx.Client) -> Optional[str]:
-    """Deezer track endpoint: returns 30s MP3 preview stream."""
-    url = "https://api.deezer.com/search"
-    params = {"q": f'artist:"{name}"', "limit": 1}
-    try:
-        resp = client.get(url, params=params, timeout=4.0)
-        if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            if data:
-                return data[0].get("preview") or ""
-    except Exception:
-        pass
     return None
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 3: Multi-Subgenre Resolution & Metadata Enrichment.")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; rely strictly on cache and local data")
+    parser.add_argument("--workers", type=int, default=3, help="Concurrency for network resolution (default: 3)")
+    parser.add_argument("--limit-lookups", type=int, default=0, help="Max artists to look up over network in this run (0=all)")
     args = parser.parse_args()
 
     if not os.path.exists(PLAYLISTS_FILE) or not os.path.exists(OCCURRENCES_FILE):
@@ -190,7 +268,7 @@ def main():
         occurrences = json.load(f)
 
     print("=" * 70)
-    print(" STAGE 3: MULTI-SUBGENRE RESOLUTION & METADATA ENRICHMENT")
+    print(" STAGE 3: MULTI-SUBGENRE RESOLUTION & AUTHENTIC METADATA ENRICHMENT")
     print("=" * 70)
     start_time = time.time()
 
@@ -199,7 +277,6 @@ def main():
 
     # 1. Count artist appearances across surviving playlists: c_i
     artist_playlist_counts = Counter()
-    artist_channel_map = {}
     artist_canonical_id = {}
     artist_harvested_preview = {}
 
@@ -213,17 +290,18 @@ def main():
             if clean_name not in seen_in_pl:
                 artist_playlist_counts[clean_name] += 1
                 seen_in_pl.add(clean_name)
-            if t.get("channel_id"):
-                artist_channel_map[clean_name] = t["channel_id"]
             if t.get("artist_id"):
                 artist_canonical_id[clean_name] = t["artist_id"]
             if t.get("preview_url") and clean_name not in artist_harvested_preview:
                 artist_harvested_preview[clean_name] = t["preview_url"]
 
-    # 2. Artist Survival Rule: c_i >= 2
+    # 2. Artist Survival Rule: c_i >= 2 (must appear in at least 2 qualifying community playlists)
+    cache = load_metadata_cache()
+    print(f"Loaded {len(cache)} existing cached artist metadata entries.")
+
     surviving_artists = [a for a, c in artist_playlist_counts.items() if c >= 2]
     pruned_count = len(artist_playlist_counts) - len(surviving_artists)
-    print(f"Artist Survival Pruning (c_i >= 2): {len(surviving_artists)} surviving artists retained ({pruned_count} singletons pruned).")
+    print(f"Artist Survival Pre-Filter (c_i >= 2): {len(surviving_artists)} candidates retained ({pruned_count} singletons pruned).")
 
     # 3. Calculate Genre Inverted Document Frequency (IDF)
     genre_playlist_counts = Counter()
@@ -236,7 +314,7 @@ def main():
     for g, count in genre_playlist_counts.items():
         idf_weights[g] = math.log(1.0 + (total_playlists / float(count)))
 
-    # 4. Compute Top 3 Subgenres per surviving artist (Authentic EveryNoise Provenance)
+    # 4. Compute Top 3 Subgenres per candidate artist
     artist_top_subgenres = {}
     for a in surviving_artists:
         a_occ = occurrences.get(a, {})
@@ -250,7 +328,6 @@ def main():
             scores.append((g_clean, score))
 
         scores.sort(key=lambda x: x[1], reverse=True)
-        # Extract top 3 distinct subgenres formatted in Title Case
         top_3 = []
         for g, _ in scores:
             title_g = " ".join(w.capitalize() for w in g.split())
@@ -259,109 +336,69 @@ def main():
             if len(top_3) >= 3:
                 break
         
-        # If no specific subgenre recorded, leave empty (never false "Pop" or artificial "Eclectic")
-        if not top_3:
-            top_3 = []
         artist_top_subgenres[a] = top_3
 
-    # 5. Metadata Hydration (YouTube Music, Deezer, Apple iTunes)
-    cache = load_metadata_cache()
-    print(f"Loaded {len(cache)} existing cached artist metadata entries.")
+    # 5. Metadata Hydration (Verified YouTube OAC & iTunes)
 
-    http_client = httpx.Client(headers={"User-Agent": "MusicAtlas/2.0"}, follow_redirects=True, timeout=5.0)
-    yt = YTMusic()
+    http_client = httpx.Client(headers={"User-Agent": "MusicAtlas/2.0"}, follow_redirects=True, timeout=6.0)
 
-    # Identify artists requiring external lookup
-    STANDARD_ITUNES_GENRES = {
-        "Pop", "Rock", "Hip-Hop/Rap", "Alternative", "Dance", "Electronic",
-        "Country", "R&B/Soul", "Metal", "Latin", "Jazz", "Reggae",
-        "Classical", "Blues", "Folk", "Singer/Songwriter", "Soundtrack",
-        "Christian & Gospel", "World", "Afrobeats", "Techno", "House",
-        "Indie Rock", "Punk", "K-Pop", "J-Pop", "Rap", "Hip Hop", "R&b",
-        "CCM", "Gospel", "Soul", "Hard Rock", "Heavy Metal", "Trance", "Dubstep"
-    }
-
+    # Sort candidates by playlist count descending so most prominent artists are resolved first
+    sorted_candidates = sorted(surviving_artists, key=lambda a: artist_playlist_counts[a], reverse=True)
     artists_to_lookup = []
-    for a_name in surviving_artists:
+    for a_name in sorted_candidates:
         cached_meta = cache.get(a_name) or cache.get(a_name.lower())
         has_valid_image = bool(
             cached_meta and
             cached_meta.get("image") and
             "d41d8cd98f00b204e9800998ecf8427e" not in cached_meta.get("image")
         )
-        has_valid_preview = bool(cached_meta and cached_meta.get("preview_url"))
-        has_valid_subs = bool(cached_meta and cached_meta.get("subscribers"))
-        has_itunes_genre = bool(cached_meta and cached_meta.get("primaryGenre") in STANDARD_ITUNES_GENRES)
+        has_valid_subs = bool(cached_meta and cached_meta.get("subscribers", 0) > 0)
+        has_top_track = bool(cached_meta and (cached_meta.get("topTrack") or cached_meta.get("top_track")))
+        has_preview = bool(cached_meta and cached_meta.get("preview_url"))
 
-        if not cached_meta or not has_valid_subs or not has_valid_image or not has_valid_preview or not has_itunes_genre:
+        if not cached_meta or not has_valid_subs or not has_valid_image or not has_top_track or not has_preview:
             artists_to_lookup.append(a_name)
+
+    if args.limit_lookups > 0:
+        artists_to_lookup = artists_to_lookup[:args.limit_lookups]
 
     print(f"Hydration Queue: {len(artists_to_lookup)} artists require metadata resolution.")
 
-    yt_lock = threading.Lock()
-
     if artists_to_lookup and not args.offline:
-        print(f"Resolving YouTube avatars, iTunes primary genres, and audio previews with parallel worker pool (16 workers)...")
-        
+        print(f"Resolving YouTube OAC channels and iTunes metadata with parallel pool ({args.workers} workers)...")
+
         def resolve_artist_metadata(name: str):
             c_meta = cache.get(name) or cache.get(name.lower()) or {}
-            c_i = artist_playlist_counts[name]
             subs = c_meta.get("subscribers", 0)
             avatar_url = c_meta.get("image", "") if "d41d8cd98f00b204e9800998ecf8427e" not in c_meta.get("image", "") else ""
             preview_url = c_meta.get("preview_url", "") or artist_harvested_preview.get(name, "")
-            itunes_genre = c_meta.get("primaryGenre", "") if c_meta.get("primaryGenre") in STANDARD_ITUNES_GENRES else ""
+            top_track = c_meta.get("topTrack") or c_meta.get("top_track", "")
+            itunes_genre = c_meta.get("primaryGenre", "")
 
-            # 1. YouTube Music channel avatar & subscribers
-            channel_id = artist_channel_map.get(name)
-            if channel_id and (subs == 0 or not avatar_url):
-                try:
-                    with yt_lock:
-                        yt_artist = yt.get_artist(channel_id)
-                    if subs == 0:
-                        subs = parse_subscribers(yt_artist.get("subscribers", ""))
-                    thumbnails = yt_artist.get("thumbnails", [])
-                    if thumbnails and not avatar_url:
-                        avatar_url = upgrade_avatar_url(thumbnails[-1].get("url", ""))
-                except Exception:
-                    pass
+            # 1. YouTube Channel Lookup if missing authentic subscribers or avatar
+            if subs <= 0 or not avatar_url:
+                yt_res = query_youtube_channel(name, http_client)
+                if yt_res:
+                    if subs <= 0 and yt_res.get("subscribers"):
+                        subs = yt_res["subscribers"]
+                    if not avatar_url and yt_res.get("image"):
+                        avatar_url = yt_res["image"]
+                time.sleep(random.uniform(0.15, 0.35))
 
-            # Search YouTube Music if still no avatar or subscribers
-            if not avatar_url or subs == 0:
-                try:
-                    with yt_lock:
-                        search_res = yt.search(name, filter="artists")
-                    if search_res:
-                        first_art = search_res[0]
-                        if not avatar_url and first_art.get("thumbnails"):
-                            avatar_url = upgrade_avatar_url(first_art["thumbnails"][-1].get("url", ""))
-                        if subs == 0 and first_art.get("subscribers"):
-                            subs = parse_subscribers(first_art["subscribers"])
-                except Exception:
-                    pass
-
-            # 2. Deezer direct artist lookup for 1000px HD portrait (if still no avatar)
-            if not avatar_url:
-                avatar_url = query_deezer_artist(name, http_client) or ""
-
-            # 3. Apple iTunes lookup for official primary genre, preview, and artwork
-            if not itunes_genre or not avatar_url or not preview_url:
+            # 2. Apple iTunes Lookup for top track, verified 30s AAC preview, artwork, and primary genre
+            if not itunes_genre or not preview_url or not top_track or not avatar_url:
                 itunes_res = query_itunes(name, http_client)
                 if itunes_res:
-                    if not itunes_genre and itunes_res.get("primaryGenre"):
-                        itunes_genre = itunes_res["primaryGenre"]
+                    if not top_track and itunes_res.get("topTrack"):
+                        top_track = itunes_res["topTrack"]
                     if not preview_url and itunes_res.get("previewUrl"):
                         preview_url = itunes_res["previewUrl"]
+                    if not itunes_genre and itunes_res.get("primaryGenre"):
+                        itunes_genre = itunes_res["primaryGenre"]
                     if not avatar_url and itunes_res.get("image"):
                         avatar_url = itunes_res["image"]
 
-            # 4. Deezer preview endpoint fallback
-            if not preview_url:
-                preview_url = query_deezer_preview(name, http_client) or ""
-
-            # Fallback subscriber estimate based on surviving playlist count
-            if subs <= 0:
-                subs = min(35_000_000, max(30_000, c_i * 120_000))
-
+            # Final primary genre resolution
             top_subg = artist_top_subgenres.get(name, [])
             valid_subg = [s for s in top_subg if s.lower().strip() not in NON_MUSICAL_AUDIO_TOKENS]
             is_valid_itunes = bool(itunes_genre and itunes_genre.lower().strip() not in NON_MUSICAL_AUDIO_TOKENS)
@@ -371,22 +408,23 @@ def main():
                 "subscribers": subs,
                 "primaryGenre": final_primary,
                 "preview_url": preview_url,
+                "topTrack": top_track,
                 "image": avatar_url
             }
 
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
             completed = 0
             for a_name, meta in executor.map(resolve_artist_metadata, artists_to_lookup):
                 cache[a_name] = meta
                 completed += 1
-                if completed % 100 == 0 or completed == len(artists_to_lookup):
-                    print(f"  Hydration Progress: [{completed}/{len(artists_to_lookup)}] artists resolved ({sum(1 for a in cache.values() if a.get('image'))} with portraits).")
+                if completed % 25 == 0 or completed == len(artists_to_lookup):
+                    print(f"  Hydration Progress: [{completed}/{len(artists_to_lookup)}] resolved ({sum(1 for a in cache.values() if a.get('subscribers', 0) > 0)} with authentic subscribers).")
                     save_metadata_cache(cache)
 
     catalog = []
+    surviving_ids = []
     try:
-        for idx, a_name in enumerate(surviving_artists):
+        for idx, a_name in enumerate(sorted_candidates):
             c_i = artist_playlist_counts[a_name]
             top_subg = artist_top_subgenres.get(a_name, [])
             valid_subg = [s for s in top_subg if s.lower().strip() not in NON_MUSICAL_AUDIO_TOKENS]
@@ -396,9 +434,12 @@ def main():
             primary_genre = cached_primary if is_valid_cached else (valid_subg[0] if valid_subg else "Other")
             a_id = artist_canonical_id.get(a_name, f"artist_{idx}")
 
-            subs = cached_meta.get("subscribers", c_i * 120_000)
+            subs = cached_meta.get("subscribers", 0)
+            # Upstream Pruning Rule: Strictly prune unverified artists lacking authentic subscribers
             if subs <= 0:
-                subs = c_i * 120_000
+                continue
+
+            top_track = cached_meta.get("topTrack") or cached_meta.get("top_track", "")
             preview_url = cached_meta.get("preview_url", "") or artist_harvested_preview.get(a_name, "")
             avatar_url = cached_meta.get("image", "")
 
@@ -420,19 +461,25 @@ def main():
                 "topSubgenres": valid_subg,
                 "image": avatar_url,
                 "previewUrl": preview_url,
+                "topTrack": top_track,
                 "spotifyUrl": f"https://open.spotify.com/search/{quote_plus(a_name)}",
                 "sharedPlaylistsCount": c_i
             })
+            surviving_ids.append(a_id)
     finally:
         http_client.close()
         save_metadata_cache(cache)
 
-    print(f"Saving {len(catalog)} enriched artists to {CATALOG_FILE}...")
+    print(f"\nSaving {len(catalog)} verified enriched artists to {CATALOG_FILE}...")
     with open(CATALOG_FILE, "w", encoding="utf-8") as f:
         json.dump(catalog, f, indent=2, ensure_ascii=False)
 
+    with open(SURVIVORS_FILE, "w", encoding="utf-8") as f:
+        json.dump(surviving_ids, f, indent=2)
+    print(f"Saved {len(surviving_ids)} surviving verified artist IDs to {SURVIVORS_FILE}.")
+
     print(f"\nStage 3 completed in {time.time() - start_time:.2f}s!")
-    print(f"Catalog saved with {len(catalog)} artists. Each artist equipped with Top 3 Subgenres & Verified Subscribers.")
+    print(f"Catalog saved with {len(catalog)} verified artists (Zero Fake Numbers).")
     print("=" * 70)
 
 if __name__ == "__main__":

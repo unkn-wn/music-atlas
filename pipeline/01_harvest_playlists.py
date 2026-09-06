@@ -1,14 +1,24 @@
 """
-Stage 2: Multi-Vector Quality-Filtered Playlist Harvesting & Provenance Tagging.
-Harvests EveryNoise curated playlists and public YouTube Music community playlists across EveryNoise genres.
+Stage 2: Authentic Multi-Subgenre Community Playlist Harvesting.
+Harvests public user-created playlists from YouTube Music across all EveryNoise subgenres equally.
 Implements:
-1. EveryNoise Taxonomy Ingestion: Curated genre playlists via Spotify embed (__NEXT_DATA__)
-2. YouTube Music Community Harvesting: 2-Pass search & tracklist ingestion
-3. Strict Unicode-safe artist sanitization (rejects dates, handles, view counts, video metadata)
-4. Zero "Pop" bias: Accumulates authentic subgenre provenance (artist_subgenre_occurrences[artist][genre] += 1)
-5. Anti-Discography filter (discard if max single-artist share > 50%)
-6. Tracklist size boundary (strictly 10 <= tracks <= 150)
-7. Resilient pacing, rate-limiting backoff, and atomic checkpointing
+1. Equal Analysis Across All Subgenres: No hardcoded artists or subgenre favoritism.
+2. Zero "The Sound of [genre]" / Zero Spotify Embeds: Exclusively queries genuine user-created playlists.
+3. Search Expansion (>= 20 playlists checked per subgenre) across natural queries:
+   - "{genre} playlist"
+   - "{genre} mix"
+   - "best of {genre}"
+4. System & Algorithmic Guard:
+   - Rejects system authors ("YouTube Music", "Spotify", "Various Artists - Topic", etc.)
+   - Rejects algorithmic mixes ("My Supermix", "Supermix", rdampl)
+   - Rejects "Sound of" / auto-generated playlist titles
+5. Quality & Anti-Discography Filters:
+   - Tracklist boundary strictly 10 <= tracks <= 150
+   - Anti-discography guard: single-artist share <= 50%
+   - Global curator cap: max 2 playlists per curator
+6. Subgenre Provenance Tracking:
+   - Accumulates authentic subgenre co-presence (artist_subgenre_occurrences[artist][genre] += 1)
+7. Resilient pacing, rate-limiting backoff, and atomic checkpointing.
 """
 
 import os
@@ -18,12 +28,9 @@ import time
 import re
 import random
 import hashlib
-import html
 import argparse
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple, Any, Set
-from concurrent.futures import ThreadPoolExecutor
-import httpx
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -32,7 +39,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 from ytmusicapi import YTMusic
-from sanitizer import sanitize_artist_name, is_valid_artist, split_artist_names
+from sanitizer import sanitize_artist_name, split_artist_names
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PIPELINE_DIR, "data")
@@ -51,6 +58,14 @@ SYSTEM_AUTHORS = {
 
 DISALLOWED_TOKENS = ["rdampl", "my supermix", "supermix"]
 
+DISALLOWED_TITLE_PATTERNS = [
+    re.compile(r"\bthe sound of\b", re.IGNORECASE),
+    re.compile(r"\bsound of\b", re.IGNORECASE),
+    re.compile(r"^intro to\b", re.IGNORECASE),
+    re.compile(r"^pulse of\b", re.IGNORECASE),
+    re.compile(r"^edge of\b", re.IGNORECASE),
+]
+
 def normalize_artist_id(name: str, channel_id: Optional[str] = None) -> str:
     """Creates a deterministic, unique identifier for an artist."""
     if channel_id and channel_id.strip():
@@ -59,7 +74,7 @@ def normalize_artist_id(name: str, channel_id: Optional[str] = None) -> str:
     return f"name_{hashlib.md5(clean.encode('utf-8')).hexdigest()[:12]}"
 
 def is_system_or_algorithmic_playlist(title: str, author_name: str, author_id: str, browse_id: str) -> bool:
-    """Rejects algorithmic, auto-generated, or system playlists."""
+    """Rejects algorithmic, auto-generated, system, or 'Sound of' playlists."""
     t_clean = title.lower().strip()
     a_clean = author_name.lower().strip()
     b_clean = browse_id.lower().strip()
@@ -70,23 +85,86 @@ def is_system_or_algorithmic_playlist(title: str, author_name: str, author_id: s
         return True
     if any(token in t_clean for token in DISALLOWED_TOKENS):
         return True
+    for pattern in DISALLOWED_TITLE_PATTERNS:
+        if pattern.search(t_clean):
+            return True
     return False
 
-def load_preexisting_cache() -> Dict[str, Dict]:
-    """Loads existing crawled playlists cache if present on disk."""
+def load_preexisting_cache(all_known_genres: List[str]) -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, int]]:
+    """Loads existing crawled playlists cache with strictly authentic taxonomy matching (zero hardcoding)."""
     if not os.path.exists(CACHE_FILE):
-        return {}
+        return [], {}, {}
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             print(f"Found {len(data)} pre-cached playlists in {CACHE_FILE}.")
-            return data
     except Exception as e:
         print(f"Warning: Could not read pre-cached playlists: {e}")
-        return {}
+        return [], {}, {}
+
+    loaded_playlists = []
+    occ_map = defaultdict(lambda: defaultdict(int))
+    seen_authors = Counter()
+
+    for pl_id, pl_data in data.items():
+        title = pl_data.get("title", "")
+        t_lower = title.lower()
+
+        # Reject sound of or algorithmic titles
+        if any(p.search(t_lower) for p in DISALLOWED_TITLE_PATTERNS):
+            continue
+
+        raw_artists = pl_data.get("artists", [])
+        if not (10 <= len(raw_artists) <= 150):
+            continue
+
+        # Anti-discography check: max single-artist share <= 50%
+        freq = Counter(raw_artists)
+        if not freq or (max(freq.values()) / float(len(raw_artists))) > 0.50:
+            continue
+
+        author_id = pl_data.get("author_id") or f"cached_{pl_id}"
+        if seen_authors[author_id] >= 2:
+            continue
+
+        # Match genre purely from EveryNoise taxonomy (longest match first, zero hardcoded artist overrides)
+        pl_genre = None
+        for g_name in all_known_genres:
+            if g_name in t_lower:
+                pl_genre = g_name
+                break
+
+        track_items = []
+        seen_in_pl = set()
+        for a_name in raw_artists:
+            for clean_name in split_artist_names(a_name):
+                canonical_id = normalize_artist_id(clean_name, None)
+                track_items.append({
+                    "artist_name": clean_name,
+                    "artist_id": canonical_id,
+                    "channel_id": ""
+                })
+                seen_in_pl.add(clean_name)
+
+        if len(track_items) >= 10:
+            if pl_genre:
+                for clean_name in seen_in_pl:
+                    occ_map[clean_name][pl_genre] += 1
+
+            seen_authors[author_id] += 1
+            loaded_playlists.append({
+                "id": pl_id,
+                "title": title,
+                "author": "Community Curator",
+                "author_id": author_id,
+                "genre": pl_genre or "general",
+                "tracks": track_items
+            })
+
+    return loaded_playlists, occ_map, seen_authors
 
 def load_checkpoint() -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, int], Set[str]]:
-    """Loads existing harvesting state or initializes empty containers."""
+    """Loads existing harvesting state, sanitizing against legacy 'Sound of' or algorithmic playlists."""
     if not os.path.exists(STATE_FILE) or not os.path.exists(PLAYLISTS_FILE) or not os.path.exists(OCCURRENCES_FILE):
         return [], {}, {}, set()
 
@@ -94,13 +172,44 @@ def load_checkpoint() -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, 
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
         with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
-            playlists = json.load(f)
-        with open(OCCURRENCES_FILE, "r", encoding="utf-8") as f:
-            occurrences = json.load(f)
-        seen_authors = state.get("seen_authors", {})
+            raw_playlists = json.load(f)
+
+        # Sanitize against any legacy "The Sound of" or system playlists
+        valid_playlists = []
+        occ_map = defaultdict(lambda: defaultdict(int))
+        seen_authors = Counter()
+
+        for pl in raw_playlists:
+            title = pl.get("title", "")
+            author = pl.get("author", "")
+            author_id = pl.get("author_id", "")
+            browse_id = pl.get("id", "")
+            genre = pl.get("genre", "general")
+            tracks = pl.get("tracks", [])
+
+            if is_system_or_algorithmic_playlist(title, author, author_id, browse_id):
+                continue
+            if not (10 <= len(tracks) <= 150):
+                continue
+            if seen_authors[author_id] >= 2:
+                continue
+
+            # Anti-discography check
+            artist_names = [t.get("artist_name", "") for t in tracks if t.get("artist_name")]
+            freq = Counter(artist_names)
+            if freq and (max(freq.values()) / float(len(artist_names))) > 0.50:
+                continue
+
+            seen_authors[author_id] += 1
+            valid_playlists.append(pl)
+            if genre and genre != "general":
+                for a_name in set(artist_names):
+                    occ_map[a_name][genre] += 1
+
         completed_genres = set(state.get("completed_genres", []))
-        print(f"Resuming from checkpoint: {len(completed_genres)} genres processed, {len(playlists)} playlists collected.")
-        return playlists, occurrences, seen_authors, completed_genres
+        # Keep completed_genres consistent
+        print(f"Resuming from checkpoint: {len(completed_genres)} genres recorded, {len(valid_playlists)} valid community playlists retained ({len(raw_playlists) - len(valid_playlists)} legacy/disallowed pruned).")
+        return valid_playlists, occ_map, dict(seen_authors), completed_genres
     except Exception as e:
         print(f"Checkpoint corrupted ({e}), starting fresh.")
         return [], {}, {}, set()
@@ -129,77 +238,14 @@ def save_checkpoint(playlists: List[Dict], occurrences: Dict[str, Dict[str, int]
         json.dump(occurrences, f, indent=2)
     os.replace(temp_occ, OCCURRENCES_FILE)
 
-def fetch_spotify_genre_playlist(spotify_id: str, genre: str, client: httpx.Client) -> Optional[List[Dict]]:
-    """Fetches official EveryNoise curated playlist tracks from Spotify embed or direct EveryNoise engenremap."""
-    # 1. Try Spotify embed first
-    if spotify_id:
-        url = f"https://open.spotify.com/embed/playlist/{spotify_id}"
-        try:
-            resp = client.get(url, timeout=4.0)
-            if resp.status_code == 200:
-                m = re.search(r'<script id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', resp.text)
-                if m:
-                    data = json.loads(m.group(1))
-                    entity = data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
-                    track_list = entity.get("trackList", [])
-                    if track_list:
-                        parsed_tracks = []
-                        for t in track_list:
-                            raw_a = t.get("subtitle") or ""
-                            artists = split_artist_names(raw_a)
-                            if not artists:
-                                continue
-                            preview = t.get("audioPreview", {}).get("url") or ""
-                            title = t.get("title") or ""
-                            for clean_a in artists:
-                                parsed_tracks.append({
-                                    "artist_name": clean_a,
-                                    "artist_id": normalize_artist_id(clean_a, None),
-                                    "title": title,
-                                    "preview_url": preview,
-                                    "channel_id": ""
-                                })
-                        if len(parsed_tracks) >= 10:
-                            return parsed_tracks
-        except Exception:
-            pass
-
-    # 2. Resilient fallback: Direct EveryNoise engenremap HTML
-    compact = re.sub(r'[^a-z0-9]', '', genre.lower())
-    en_url = f"https://everynoise.com/engenremap-{compact}.html"
-    try:
-        resp = client.get(en_url, timeout=8.0)
-        if resp.status_code == 200:
-            items = re.findall(r'<div id=item\d+[^>]*>.*?</div>', resp.text)
-            parsed_tracks = []
-            for item in items:
-                m = re.search(r'>([^<]+)<a class=navlink', item)
-                if not m:
-                    continue
-                raw_name = html.unescape(m.group(1).strip())
-                p_match = re.search(r'preview_url="([^"]+)"', item)
-                preview = p_match.group(1) if p_match else ""
-                for clean_a in split_artist_names(raw_name):
-                    parsed_tracks.append({
-                        "artist_name": clean_a,
-                        "artist_id": normalize_artist_id(clean_a, None),
-                        "title": f"The Sound of {genre.title()}",
-                        "preview_url": preview,
-                        "channel_id": ""
-                    })
-            if len(parsed_tracks) >= 10:
-                return parsed_tracks
-    except Exception:
-        pass
-
-    return None
-
 def main():
-    parser = argparse.ArgumentParser(description="Stage 2: Quality-Filtered Community Playlist Harvesting.")
+    parser = argparse.ArgumentParser(description="Stage 2: Authentic Multi-Subgenre Community Playlist Harvesting.")
     parser.add_argument("--limit-genres", type=int, default=None, help="Limit number of genres to crawl in this run")
-    parser.add_argument("--use-cache", action="store_true", default=True, help="Incorporate pre-existing crawled playlist cache")
+    parser.add_argument("--playlists-per-genre", type=int, default=20, help="Candidate playlists to check per genre (default: 20)")
+    parser.add_argument("--max-accepted-per-genre", type=int, default=10, help="Max qualifying playlists to accept per genre (default: 10)")
     parser.add_argument("--rate-limit", type=float, default=2.5, help="Max requests per second for YTM (default: 2.5)")
-    parser.add_argument("--ytm-limit", type=int, default=120, help="Max genres to crawl with YTM (default: 120)")
+    parser.add_argument("--use-cache", action="store_true", default=True, help="Incorporate pre-existing crawled playlist cache")
+    parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
     args = parser.parse_args()
 
     if not os.path.exists(GENRES_FILE):
@@ -212,145 +258,40 @@ def main():
         genres_data = genres_data[:args.limit_genres]
 
     print("=" * 70)
-    print(f" STAGE 2: COMMUNITY PLAYLIST HARVESTING ({len(genres_data)} genres queued)")
+    print(f" STAGE 2: AUTHENTIC USER COMMUNITY PLAYLIST HARVESTING ({len(genres_data)} genres queued)")
+    print(f" Target: Checking at least {args.playlists_per_genre} community playlists per genre")
+    print(f" Equal Analysis: Every subgenre processed through identical quality pipeline")
     print("=" * 70)
     start_time = time.time()
 
-    playlists, occurrences, seen_authors, completed_genres = load_checkpoint()
+    if args.fresh:
+        playlists, occurrences, seen_authors, completed_genres = [], {}, {}, set()
+    else:
+        playlists, occurrences, seen_authors, completed_genres = load_checkpoint()
+
     occ_map = defaultdict(lambda: defaultdict(int))
     for a_name, g_counts in occurrences.items():
         for g, c in g_counts.items():
             occ_map[a_name][g] = c
 
     existing_playlist_ids = {p["id"] for p in playlists}
-
-    # Pre-sort all known EveryNoise genres by length descending for greedy title matching
     all_known_genres = sorted([g["genre"] for g in genres_data], key=lambda x: len(x), reverse=True)
 
-    # 1. Incorporate pre-existing crawled playlists if available
-    if args.use_cache:
-        pre_cache = load_preexisting_cache()
-        cached_added = 0
-        for pl_id, pl_data in pre_cache.items():
-            if pl_id in existing_playlist_ids:
-                continue
-            
-            raw_artists = pl_data.get("artists", [])
-            title = pl_data.get("title", "")
-            if not (10 <= len(raw_artists) <= 150):
-                continue
-            
-            # Anti-discography check
-            freq = Counter(raw_artists)
-            if not freq or (max(freq.values()) / len(raw_artists)) > 0.50:
-                continue
+    # 1. Ingest qualified offline cache if requested
+    if args.use_cache and not playlists:
+        cached_pl, cached_occ, cached_auth = load_preexisting_cache(all_known_genres)
+        for pl in cached_pl:
+            if pl["id"] not in existing_playlist_ids:
+                playlists.append(pl)
+                existing_playlist_ids.add(pl["id"])
+        for a_name, g_map in cached_occ.items():
+            for g, count in g_map.items():
+                occ_map[a_name][g] += count
+        for a_id, count in cached_auth.items():
+            seen_authors[a_id] = seen_authors.get(a_id, 0) + count
+        print(f"Incorporated {len(playlists)} qualifying user playlists from offline cache.")
 
-            # Identify genre from title by matching against EveryNoise taxonomy
-            # NO default to "pop"! If no match, tag as "general" and do not pollute occ_map.
-            pl_genre = None
-            t_lower = title.lower()
-            for g_name in all_known_genres:
-                if g_name in t_lower:
-                    pl_genre = g_name
-                    break
-
-            # Build track items with strict sanitization and multi-artist decomposition
-            track_items = []
-            seen_in_pl = set()
-            for a_name in raw_artists:
-                for clean_name in split_artist_names(a_name):
-                    canonical_id = normalize_artist_id(clean_name, None)
-                    track_items.append({
-                        "artist_name": clean_name,
-                        "artist_id": canonical_id,
-                        "channel_id": ""
-                    })
-                    if clean_name not in seen_in_pl:
-                        # ONLY accumulate subgenre if an authentic EveryNoise genre matched
-                        if pl_genre:
-                            occ_map[clean_name][pl_genre] += 1
-                        seen_in_pl.add(clean_name)
-
-            author_id = pl_data.get("author_id") or f"cached_{pl_id}"
-            if seen_authors.get(author_id, 0) >= 2:
-                continue
-
-            if len(track_items) >= 10:
-                seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
-                playlists.append({
-                    "id": pl_id,
-                    "title": title,
-                    "author": "Community Curator",
-                    "author_id": author_id,
-                    "genre": pl_genre or "general",
-                    "tracks": track_items
-                })
-                existing_playlist_ids.add(pl_id)
-                cached_added += 1
-
-        if cached_added > 0:
-            print(f"Incorporated {cached_added} qualified playlists from offline cache.")
-
-    # 2. Ingest EveryNoise Curated Playlists across top 450 genres in parallel
-    target_genres = genres_data[:450]
-    print(f"\nHarvesting EveryNoise official curated playlists across {len(target_genres)} genres in parallel...")
-
-    tasks_to_fetch = []
-    for g_info in target_genres:
-        genre = g_info["genre"]
-        spotify_id = g_info.get("spotify_playlist_id")
-        pl_id = f"everynoise_{spotify_id}" if spotify_id else f"everynoise_{genre}"
-        if pl_id not in existing_playlist_ids and spotify_id:
-            tasks_to_fetch.append((spotify_id, genre, pl_id))
-
-    print(f"Queued {len(tasks_to_fetch)} EveryNoise playlists to harvest...")
-    spotify_harvested = 0
-
-    if tasks_to_fetch:
-        http_client = httpx.Client(
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=8.0,
-            limits=httpx.Limits(max_connections=25, max_keepalive_connections=15)
-        )
-
-        def worker_fetch(task):
-            sid, gen, pid = task
-            tr = fetch_spotify_genre_playlist(sid, gen, http_client)
-            return sid, gen, pid, tr
-
-        try:
-            from concurrent.futures import as_completed
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(worker_fetch, t) for t in tasks_to_fetch]
-                for idx, fut in enumerate(as_completed(futures)):
-                    sid, gen, pid, tracks = fut.result()
-                    if tracks and len(tracks) >= 10:
-                        seen_in_pl = set()
-                        for t in tracks:
-                            a_name = t["artist_name"]
-                            if a_name not in seen_in_pl:
-                                occ_map[a_name][gen] += 1
-                                seen_in_pl.add(a_name)
-
-                        playlists.append({
-                            "id": pid,
-                            "title": f"The Sound of {gen.title()}",
-                            "author": "Every Noise at Once",
-                            "author_id": "everynoise_curator",
-                            "genre": gen,
-                            "tracks": tracks
-                        })
-                        existing_playlist_ids.add(pid)
-                        spotify_harvested += 1
-
-                    if (idx + 1) % 50 == 0 or (idx + 1) == len(tasks_to_fetch):
-                        print(f"  EveryNoise Ingestion: [{idx + 1}/{len(tasks_to_fetch)}] genres checked ({spotify_harvested} playlists added).")
-        finally:
-            http_client.close()
-
-    print(f"Added {spotify_harvested} EveryNoise official genre playlists with authentic subgenre provenance.")
-
-    # 3. Harvest YouTube Music Community Playlists (for top genres)
+    # 2. YouTube Music Community Playlist Harvesting
     yt = YTMusic()
     min_interval = 1.0 / max(0.5, args.rate_limit)
     last_req_time = 0.0
@@ -367,31 +308,45 @@ def main():
     genres_processed_in_run = 0
     completed_genre_list = list(completed_genres)
 
-    # Crawl YTM community playlists for top uncompleted genres
-    ytm_genre_slice = genres_data[:args.ytm_limit]
-    for g_idx, g_info in enumerate(ytm_genre_slice):
+    for g_idx, g_info in enumerate(genres_data):
         genre = g_info["genre"]
         if genre in completed_genres:
             continue
 
-        query = g_info.get("primary_query", f"{genre} playlist")
+        search_queries = [
+            g_info.get("primary_query", f"{genre} playlist"),
+            g_info.get("secondary_query", f"{genre} mix"),
+            g_info.get("tertiary_query", f"best of {genre}")
+        ]
 
+        # Gather at least args.playlists_per_genre candidate playlists across queries
         candidates = []
-        try:
-            pace_request()
-            results = yt.search(query, filter="playlists", limit=4)
-            candidates = results[:4] if results else []
-        except Exception as e:
-            err_str = str(e).lower()
-            if "429" in err_str or "quota" in err_str:
-                print(f"  YTM 429 rate limit hit at genre '{genre}'. Backing off for 15s...")
-                time.sleep(15.0)
-            completed_genres.add(genre)
-            completed_genre_list.append(genre)
-            continue
+        seen_cand_ids = set()
+
+        for q in search_queries:
+            if len(candidates) >= args.playlists_per_genre:
+                break
+            try:
+                pace_request()
+                needed_cands = max(10, args.playlists_per_genre - len(candidates))
+                results = yt.search(q, filter="playlists", limit=needed_cands)
+                for item in results or []:
+                    bid = item.get("browseId")
+                    if bid and bid not in seen_cand_ids and bid not in existing_playlist_ids:
+                        candidates.append(item)
+                        seen_cand_ids.add(bid)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str:
+                    print(f"  YTM 429 rate limit hit at genre '{genre}'. Backing off for 15s...")
+                    time.sleep(15.0)
+                break
 
         accepted_for_genre = 0
         for cand in candidates:
+            if accepted_for_genre >= args.max_accepted_per_genre:
+                break
+
             browse_id = cand.get("browseId")
             if not browse_id or browse_id in existing_playlist_ids:
                 continue
@@ -411,7 +366,7 @@ def main():
                 author_name = "Community Curator"
                 author_id = f"anon_{browse_id[:8]}"
 
-            # 1. Category & Channel Guard
+            # 1. System, Algorithmic & "Sound of" Guard
             if is_system_or_algorithmic_playlist(title, author_name, author_id, browse_id):
                 continue
 
@@ -419,11 +374,11 @@ def main():
             if seen_authors.get(author_id, 0) >= 2:
                 continue
 
-            # 3. Pass 2B: Full Tracklist Ingestion
+            # 3. Full Tracklist Ingestion
             try:
                 pace_request()
                 pl_details = yt.get_playlist(browse_id, limit=150)
-            except Exception as e:
+            except Exception:
                 continue
 
             raw_tracks = pl_details.get("tracks", [])
@@ -451,7 +406,7 @@ def main():
             if max_share > 0.50:
                 continue
 
-            # Passed all filters! Accept playlist
+            # 6. Passed all filters: record tracks & subgenre occurrences
             seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
             existing_playlist_ids.add(browse_id)
 
@@ -492,21 +447,19 @@ def main():
                     "tracks": parsed_tracks
                 })
                 accepted_for_genre += 1
-                if accepted_for_genre >= 2:
-                    break
 
         completed_genres.add(genre)
         completed_genre_list.append(genre)
         genres_processed_in_run += 1
 
-        if genres_processed_in_run % 25 == 0:
-            print(f"  Checkpoint: {len(completed_genre_list)} genres done, {len(playlists)} playlists collected. Saving state...")
+        if genres_processed_in_run % 20 == 0:
+            print(f"  Progress: [{len(completed_genre_list)}/{len(genres_data)}] genres processed ({len(playlists)} user playlists collected). Saving state...")
             save_checkpoint(playlists, occ_map, seen_authors, completed_genre_list)
 
     # Final checkpoint save
     save_checkpoint(playlists, occ_map, seen_authors, completed_genre_list)
     print(f"\nStage 2 completed in {time.time() - start_time:.2f}s!")
-    print(f"Total surviving playlists: {len(playlists)}")
+    print(f"Total surviving authentic playlists: {len(playlists)}")
     print(f"Total tracked artists with provenance tags: {len(occ_map)}")
     print("=" * 70)
 

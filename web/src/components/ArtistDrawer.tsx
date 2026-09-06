@@ -55,6 +55,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         {/* Ambient blurred backdrop */}
         {artist.image && (
           <img
+            key={`${artist.id}-backdrop`}
             src={artist.image}
             alt=""
             aria-hidden="true"
@@ -66,6 +67,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         )}
         {/* Main artist photo positioned at object-top for natural portrait framing */}
         <img
+          key={`${artist.id}-main`}
           src={artist.image || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
           alt={artist.label}
           className="w-full h-full object-cover object-top"

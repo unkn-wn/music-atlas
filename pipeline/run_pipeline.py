@@ -37,6 +37,7 @@ STEPS = [
 def main():
     parser = argparse.ArgumentParser(description="Master Execution Pipeline for Music Atlas.")
     parser.add_argument("--tier", type=int, choices=[1, 2, 3, 4], default=2, help="Scale tier (1=500, 2=1500, 3=3000, 4=6291)")
+    parser.add_argument("--playlists-per-genre", type=int, default=20, help="Candidate community playlists to check per genre in Stage 2 (default: 20)")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; use disk cache & local snapshots")
     parser.add_argument("--skip-harvest", action="store_true", help="Skip Stage 1 and 2 network crawling; rebuild graph from cached data")
     parser.add_argument("--fast-layout", action="store_true", help="Run accelerated layout iterations for fast builds (~30s)")
@@ -62,6 +63,7 @@ def main():
             if args.offline:
                 cmd.append("--offline")
         elif idx == 2:
+            cmd.extend(["--playlists-per-genre", str(args.playlists_per_genre)])
             if args.offline:
                 cmd.extend(["--limit-genres", "0"])
         elif idx == 3:

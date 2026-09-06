@@ -28,6 +28,7 @@ export interface AtlasNode {
   primaryGenre?: string;
   image: string;
   previewUrl: string;
+  topTrack?: string;
   spotifyUrl: string;
   genres: string[];
   topSubgenres?: string[];

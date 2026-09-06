@@ -1,11 +1,10 @@
 """
 Stage 1: EveryNoise Popularity Taxonomy Ingestion.
-Extracts 6,291 popularity-ranked genres from EveryNoise at Once (https://everynoise.com/everynoise1d.html).
+Extracts popularity-ranked genres from EveryNoise at Once (https://everynoise.com/everynoise1d.html).
 Extracts:
 1. Genre rank (1 to 6291)
-2. Direct Spotify curated playlist ID
-3. Clean lowercase genre name
-4. Prioritized search queries: "{genre} playlist" and "{genre} mix"
+2. Clean lowercase genre name
+3. Prioritized search queries: "{genre} playlist", "{genre} mix", and "best of {genre}"
 Includes offline resilience snapshot fallback and atomic output write.
 """
 
@@ -35,7 +34,6 @@ OUTPUT_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 
 ROW_REGEX = re.compile(
     r'<td[^>]*>\s*(\d+)\s*</td>.*?'
-    r'href="https://embed\.spotify\.com/\?uri=spotify:playlist:([a-zA-Z0-9]+)".*?'
     r'href="everynoise1d-[^"]*"[^>]*>([^<]+)</a>',
     re.DOTALL
 )
@@ -76,16 +74,16 @@ def parse_genres_from_html(html_text: str) -> list[dict]:
     for row in html_text.split("</tr>"):
         m = ROW_REGEX.search(row)
         if m:
-            rank_str, spotify_id, genre_name = m.groups()
+            rank_str, genre_name = m.groups()
             clean_genre = html.unescape(genre_name.strip().lower())
             if clean_genre in NON_MUSICAL_AUDIO_TOKENS:
                 continue
             genres.append({
                 "rank": int(rank_str),
-                "spotify_playlist_id": spotify_id,
                 "genre": clean_genre,
                 "primary_query": f"{clean_genre} playlist",
-                "secondary_query": f"{clean_genre} mix"
+                "secondary_query": f"{clean_genre} mix",
+                "tertiary_query": f"best of {clean_genre}"
             })
     return genres
 

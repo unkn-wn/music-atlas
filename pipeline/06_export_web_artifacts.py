@@ -202,6 +202,7 @@ def main():
             "topSubgenres": meta.get("topSubgenres", []),
             "image": meta.get("image", ""),
             "previewUrl": meta.get("previewUrl", ""),
+            "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{meta['name']}"),
             "sharedPlaylistsCount": c_i,
             "topCrossovers": adaptive_connections
@@ -240,7 +241,7 @@ def main():
             "type": "curve",
             "curvature": round(curvature, 3),
             "weight": e["weight"],
-            "size": max(0.12, round(e["weight"] * 1.4, 2)),
+            "size": max(0.08, round(e["weight"] * 0.9, 2)),
             "color": src_color,
             "rawSharedPlaylists": e["rawSharedPlaylists"],
             "crossoverSourcePercent": e["crossoverSourcePercent"],

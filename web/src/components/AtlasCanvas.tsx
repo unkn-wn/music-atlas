@@ -26,12 +26,11 @@ function getCachedImage(url: string, onLoaded?: () => void): HTMLImageElement | 
   let img = imageCache.get(url);
   if (!img) {
     img = new Image();
-    // Do not set crossOrigin to avoid CORS preflight failures across CDNs (Apple Music / Deezer)
     img.onload = () => {
       if (onLoaded) onLoaded();
     };
     img.onerror = () => {
-      // Failed image will retain naturalWidth === 0 and fall back to colored circle
+      // Failed image retains naturalWidth === 0
     };
     img.src = url;
     imageCache.set(url, img);
@@ -94,8 +93,7 @@ function hexToRgba(hex: string, alpha: number): string {
     }
   }
 
-  // WebGL in Sigma uses gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) (premultiplied alpha).
-  // Premultiply RGB channels by alpha so colors render as intended without blowing out additive brightness!
+  // WebGL premultiplied alpha
   const pr = Math.round(r * clampedAlpha);
   const pg = Math.round(g * clampedAlpha);
   const pb = Math.round(b * clampedAlpha);
@@ -114,7 +112,11 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sigmaRef = useRef<Sigma | null>(null);
-  const zoomTierRef = useRef<ZoomTier>('MACRO');
+  const zoomTierRef = useRef<ZoomTier>('FAR');
+
+  // Stale closure prevention: store latest onSelectNode in ref
+  const onSelectNodeRef = useRef(onSelectNode);
+  onSelectNodeRef.current = onSelectNode;
 
   // Initialize Sigma v3 with curved edges and circle node programs
   useEffect(() => {
@@ -127,12 +129,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       labelSize: 12,
       labelWeight: '700',
       labelColor: { color: '#ffffff' },
-      labelRenderedSizeThreshold: 6,
-      minCameraRatio: 0.05,
-      maxCameraRatio: 6.0,
+      labelRenderedSizeThreshold: 8,
+      minCameraRatio: 0.02,
+      maxCameraRatio: 8.0,
       enableEdgeEvents: false,
       allowInvalidContainer: true,
-      stagePadding: 80,
+      stagePadding: 120,
       defaultEdgeColor: 'rgba(148, 163, 184, 0.18)',
       defaultNodeColor: '#94a3b8',
       defaultEdgeType: 'curve',
@@ -152,9 +154,19 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const y = data.y;
         const strokeColor = data.originalColor || data.color || '#38bdf8';
 
-        // 1. Draw circular avatar image if available
-        const hasImage = Boolean(data.image && !data.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
-        if (hasImage) {
+        // Strict avatar rendering policy:
+        // Render 2D software avatars strictly for:
+        // - Headliners (data.isHeadliner === true)
+        // - Selected artist (data.isSelected === true)
+        // - Connected neighbor peers (data.isNeighbor === true)
+        // All other general nodes render at silky 60-120 FPS via WebGL NodeCircleProgram
+        const shouldRenderAvatar = Boolean(
+          data.image &&
+          !data.image.includes('d41d8cd98f00b204e9800998ecf8427e') &&
+          (data.isHeadliner || data.isSelected || data.isNeighbor)
+        );
+
+        if (shouldRenderAvatar) {
           const img = getCachedImage(data.image, () => {
             if (sigmaRef.current) {
               sigmaRef.current.scheduleRender();
@@ -170,7 +182,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           context.stroke();
         }
 
-        // 2. If node is the selected artist, draw prominent outer genre halo ring
+        // Selected artist outer halo ring
         if (data.isSelected) {
           context.beginPath();
           context.arc(x, y, radius + 4.0, 0, Math.PI * 2);
@@ -179,7 +191,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           context.stroke();
         }
 
-        // 3. Draw artist name label text beneath avatar with adequate breathing room
+        // Artist name label text beneath node
         const size = settings.labelSize || 12;
         const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
         const weight = settings.labelWeight || '700';
@@ -189,12 +201,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
         const yOffset = y + radius + 8;
 
-        // Deep halo outline for high contrast against dark cosmos
+        // Halo outline for high contrast
         context.lineWidth = 3.5;
         context.strokeStyle = 'rgba(7, 9, 14, 0.95)';
         context.strokeText(data.label, x, yOffset);
 
-        // Crisp white text fill
+        // Text fill
         context.fillStyle = '#ffffff';
         context.fillText(data.label, x, yOffset);
       },
@@ -204,32 +216,14 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const x = data.x;
         const y = data.y;
 
-        // 1. Draw circular avatar image if available
-        const hasImage = Boolean(data.image && !data.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
-        if (hasImage) {
-          const img = getCachedImage(data.image, () => {
-            if (sigmaRef.current) {
-              sigmaRef.current.scheduleRender();
-            }
-          });
-          drawAvatarImage(context, img, x, y, radius, strokeColor);
-
-          // Inner border ring matching genre color
-          context.beginPath();
-          context.arc(x, y, radius, 0, Math.PI * 2);
-          context.strokeStyle = strokeColor;
-          context.lineWidth = Math.max(1.5, radius * 0.12);
-          context.stroke();
-        }
-
-        // 2. Genre/community color halo around hovered node
+        // Proportional hover ring that maintains constant visual distance away from artist circle
+        const ringRadius = radius + Math.max(6.0, radius * 0.22);
         context.beginPath();
-        context.arc(x, y, radius + 4.0, 0, Math.PI * 2);
+        context.arc(x, y, ringRadius, 0, Math.PI * 2);
         context.strokeStyle = strokeColor;
-        context.lineWidth = 2.5;
+        context.lineWidth = Math.max(2.0, radius * 0.08);
         context.stroke();
 
-        // 3. Label positioned beneath node with highlight color
         const labelText = data.label || data.originalLabel;
         if (!labelText) return;
         const size = settings.labelSize || 12;
@@ -238,7 +232,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         context.textAlign = 'center';
         context.textBaseline = 'top';
 
-        const yOffset = y + radius + 8;
+        // Offset label from outer ring edge to avoid visual overlap
+        const yOffset = y + ringRadius + 6;
 
         context.lineWidth = 3.5;
         context.strokeStyle = 'rgba(7, 9, 14, 0.95)';
@@ -250,20 +245,19 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     });
 
     const camera = sigma.getCamera();
-    camera.setState({ x: 0.5, y: 0.5, ratio: 1.2 });
+    camera.setState({ x: 0.5, y: 0.5, ratio: 1.0 });
 
-    // Ensure WebGL hoverNodes layer renders behind 2D labels and hovers canvases so color fill stays behind avatar images
     const hoverNodes = containerRef.current.querySelector('.sigma-hoverNodes');
     const labels = containerRef.current.querySelector('.sigma-labels');
     if (labels && hoverNodes) labels.before(hoverNodes);
 
-    // Discrete Camera Zoom LOD: updates zoom tier matching label & image visibility
+    // Discrete Camera Zoom LOD calibrated for expanded cosmos
     camera.on('updated', () => {
       const ratio = camera.getState().ratio;
-      let nextTier: ZoomTier = 'MACRO';
-      if (ratio < 0.38) nextTier = 'MICRO';
-      else if (ratio < 0.85) nextTier = 'MESO';
-      else if (ratio <= 1.4) nextTier = 'MACRO';
+      let nextTier: ZoomTier = 'FAR';
+      if (ratio < 0.25) nextTier = 'MICRO';
+      else if (ratio < 0.55) nextTier = 'MESO';
+      else if (ratio < 0.95) nextTier = 'MACRO';
       else nextTier = 'FAR';
 
       if (nextTier !== zoomTierRef.current) {
@@ -274,7 +268,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
     sigmaRef.current = sigma;
 
-    // Events: hover sets pointer cursor locally, selection triggers inspector
+    // Events using onSelectNodeRef to prevent stale closures
     sigma.on('enterNode', () => {
       if (containerRef.current) containerRef.current.style.cursor = 'pointer';
     });
@@ -284,11 +278,11 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     });
 
     sigma.on('clickNode', (e) => {
-      onSelectNode(e.node);
+      onSelectNodeRef.current(e.node);
     });
 
     sigma.on('clickStage', () => {
-      onSelectNode(null);
+      onSelectNodeRef.current(null);
     });
 
     return () => {
@@ -312,33 +306,82 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     resetView: () => {
       if (!sigmaRef.current) return;
       const camera = sigmaRef.current.getCamera();
-      camera.animatedReset({ duration: 600 });
+      camera.animate({ x: 0.5, y: 0.5, ratio: 1.0 }, { duration: 600 });
     },
     flyToNode: (nodeId: string) => {
       if (!sigmaRef.current || !graph || !graph.hasNode(nodeId)) return;
       const sigma = sigmaRef.current;
       const nodeDisplayData = sigma.getNodeDisplayData(nodeId);
       if (!nodeDisplayData) return;
+
+      // Extract strictly active relative connections (topCrossovers) matching the selection reducer
+      const nodeAttrs = graph.getNodeAttributes(nodeId);
+      const crossovers = (nodeAttrs.topCrossovers as Array<{ neighborId: string }>) || [];
+      const targetIds = [nodeId, ...crossovers.map((c) => c.neighborId)].filter((id) => graph.hasNode(id));
+      const targetDisplayData = targetIds
+        .map((id) => sigma.getNodeDisplayData(id))
+        .filter(Boolean);
+
+      let minX = nodeDisplayData.x;
+      let maxX = nodeDisplayData.x;
+      let minY = nodeDisplayData.y;
+      let maxY = nodeDisplayData.y;
+
+      for (const d of targetDisplayData) {
+        if (!d) continue;
+        if (d.x < minX) minX = d.x;
+        if (d.x > maxX) maxX = d.x;
+        if (d.y < minY) minY = d.y;
+        if (d.y > maxY) maxY = d.y;
+      }
+
+      const spanX = maxX - minX;
+      const spanY = maxY - minY;
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+
+      const container = containerRef.current;
+      const width = container?.clientWidth || window.innerWidth;
+      const height = container?.clientHeight || window.innerHeight;
+      const isDesktop = width >= 768;
+      const drawerWidth = isDesktop ? 408 : 0;
+      const availWidth = Math.max(300, width - drawerWidth);
+
+      let targetRatio: number;
+      if (spanX < 0.001 && spanY < 0.001) {
+        targetRatio = 0.28;
+      } else {
+        const ratioForX = (spanX * 1.35) * (height / availWidth);
+        const ratioForY = spanY * 1.35;
+        targetRatio = Math.max(0.12, Math.min(1.0, Math.max(ratioForX, ratioForY)));
+      }
+
+      // Shift camera center dynamically so relative connections are centered in visible stage to the left of the drawer
+      const shiftX = (drawerWidth / (2 * height)) * targetRatio;
+      const adjustedCenterX = centerX + shiftX;
+
       const camera = sigma.getCamera();
       camera.animate(
         {
-          x: nodeDisplayData.x,
-          y: nodeDisplayData.y,
-          ratio: 0.58
+          x: adjustedCenterX,
+          y: centerY,
+          ratio: targetRatio
         },
         { duration: 750 }
       );
     }
   }));
 
-  // Build fast edge lookup map with pre-calculated community colors
+  // Build fast edge lookup map with pre-calculated tier colors (zero-allocation per frame)
   const edgeLookupRef = useRef<Map<string, {
     src: string;
     dst: string;
     srcCont: number;
     dstCont: number;
     size: number;
-    color: string;
+    weight: number;
+    isBridge: boolean;
+    colorByTier: Record<ZoomTier, string>;
   }>>(new Map());
 
   useEffect(() => {
@@ -349,50 +392,62 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       srcCont: number;
       dstCont: number;
       size: number;
-      color: string;
+      weight: number;
+      isBridge: boolean;
+      colorByTier: Record<ZoomTier, string>;
     }>();
 
     graph.forEachEdge((edge, attrs, source, target) => {
       const srcColor = (graph.getNodeAttribute(source, 'color') as string) || (attrs.color as string) || '#94a3b8';
+      const weight = (attrs.weight as number) || 0.5;
+
       map.set(edge, {
         src: source,
         dst: target,
         srcCont: (graph.getNodeAttribute(source, 'continentId') as number) || 0,
         dstCont: (graph.getNodeAttribute(target, 'continentId') as number) || 0,
         size: (attrs.size as number) || 1,
-        color: srcColor
+        weight,
+        isBridge: Boolean(attrs.isBridge),
+        colorByTier: {
+          FAR: hexToRgba(srcColor, 0.12),
+          MACRO: hexToRgba(srcColor, 0.18),
+          MESO: hexToRgba(srcColor, 0.24),
+          MICRO: hexToRgba(srcColor, 0.30)
+        }
       });
     });
     edgeLookupRef.current = map;
   }, [graph]);
 
-  // Update Dynamic Reducers (Edge thresholding, top-10 crossover focus mode, and continent filtering)
+  // Update Dynamic Reducers (Edge thresholding, adaptive crossover focus mode, and continent filtering)
   useEffect(() => {
     if (!sigmaRef.current || !graph) return;
 
     const sigma = sigmaRef.current;
     const edgeMap = edgeLookupRef.current;
 
-    // Resolve all incident neighbor IDs matching the sidebar relationships when an artist is selected
+    // Resolve all adaptive neighbor IDs (full 6 to 20 connections) without .slice(0, 10)
     const neighborIds = new Set<string>();
     let selectedArtistColor = '#38bdf8';
     if (selectedNodeId && graph.hasNode(selectedNodeId)) {
       const nodeAttrs = graph.getNodeAttributes(selectedNodeId);
       selectedArtistColor = (nodeAttrs.color as string) || '#38bdf8';
       const crossovers = (nodeAttrs.topCrossovers as Array<{ neighborId: string }>) || [];
-      crossovers.slice(0, 10).forEach((c) => {
+      crossovers.forEach((c) => {
         neighborIds.add(c.neighborId);
       });
     }
 
-    // Dynamic Edge Reducer with Zoom-Tier LOD (faint background filaments -> focused artist-colored relationships on selection)
+    // Dynamic Edge Reducer
     sigma.setSetting('edgeReducer', (edge, data) => {
       const cached = edgeMap.get(edge);
       const src = cached ? cached.src : graph.source(edge);
       const dst = cached ? cached.dst : graph.target(edge);
       const tier = zoomTierRef.current;
+      const weight = cached ? cached.weight : (data.weight || 0.5);
 
-      // 1. When an artist is selected: illuminate ONLY lines connecting to the exact same relationships shown in the sidebar!
+      // 1. When an artist is selected: illuminate filaments connecting to the adaptive connections
       if (selectedNodeId) {
         const isIncidentToSelected = (src === selectedNodeId && neighborIds.has(dst)) || (dst === selectedNodeId && neighborIds.has(src));
 
@@ -400,7 +455,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           return {
             ...data,
             hidden: false,
-            color: selectedArtistColor, // Artist's community color instead of default blue
+            color: selectedArtistColor,
             size: Math.max(0.6, (cached ? cached.size : 1) * 0.85),
             zIndex: 10
           };
@@ -419,24 +474,18 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         }
       }
 
-      // 3. Subtle, luminous translucent filaments across all zoom levels
-      // Slightly lower transparency (higher alpha) for clearer visibility and luminosity
-      let alpha = 0.18;
-      let sizeFactor = 0.20;
-
-      if (tier === 'MICRO') {
-        alpha = 0.30;
-        sizeFactor = 0.28;
-      } else if (tier === 'MESO') {
-        alpha = 0.24;
-        sizeFactor = 0.24;
-      } else if (tier === 'FAR') {
-        alpha = 0.12;
-        sizeFactor = 0.16;
+      // 3. Dynamic Edge Culling: at global zoom-out (FAR), hide weak edges (w < 0.22) unless it's a structural bridge
+      const isBridge = cached ? cached.isBridge : Boolean(data.isBridge);
+      if (tier === 'FAR' && weight < 0.22 && !isBridge) {
+        return { ...data, hidden: true };
       }
 
-      const baseColor = cached ? cached.color : '#94a3b8';
-      const edgeColor = hexToRgba(baseColor, alpha);
+      // 4. Subtle, precomputed translucent filaments across all zoom levels
+      const edgeColor = cached ? cached.colorByTier[tier] : 'rgba(148, 163, 184, 0.18)';
+      let sizeFactor = 0.20;
+      if (tier === 'MICRO') sizeFactor = 0.28;
+      else if (tier === 'MESO') sizeFactor = 0.24;
+      else if (tier === 'FAR') sizeFactor = 0.16;
 
       return {
         ...data,
@@ -446,27 +495,30 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       };
     });
 
-    // Dynamic Node Reducer: All nodes render as fast WebGL circles, while canvas draws avatar and label together in lockstep
+    // Dynamic Node Reducer
     sigma.setSetting('nodeReducer', (node, data) => {
       const continentId = data.continentId as number;
       const originalColor = data.originalColor || data.color;
       const originalLabel = (data.originalLabel || data.label || '') as string;
-      const size = (data.originalSize as number) || (data.size as number) || 2.5;
+      const size = (data.originalSize as number) || (data.size as number) || 1.1;
       const tier = zoomTierRef.current;
 
-      // 1. When an artist is selected: keep natural size (no scale-up), highlight focal artist and relationship peers
-      // Selected artist and direct neighbors ALWAYS display their image portraits and names
+      // Inverted z-index: smaller artists get higher z-index so they remain hoverable/clickable over larger artists
+      const invertedZ = Math.max(1, Math.round(100 - (size || 1.1)));
+
+      // 1. When an artist is selected: focal artist and adaptive relationship peers
       if (selectedNodeId) {
         if (node === selectedNodeId) {
           return {
             ...data,
             type: 'circle',
-            size, // Preserve exact same size (no scale-up)
+            size,
             color: originalColor,
             forceLabel: true,
             label: originalLabel,
             isSelected: true,
-            zIndex: 20
+            isNeighbor: false,
+            zIndex: 200
           };
         }
 
@@ -474,24 +526,26 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           return {
             ...data,
             type: 'circle',
-            size: Math.min(18.0, Math.max(8.0, size * 0.72)), // Balanced orbital relationship badge size
+            size, // Keeps authentic size, does not grow artificially
             color: originalColor,
             forceLabel: true,
             label: originalLabel,
             isSelected: false,
-            zIndex: 10
+            isNeighbor: true,
+            zIndex: 100 + invertedZ
           };
         }
 
-        // Dim unrelated nodes into dark cosmos (label: null ensures Sigma's labelGrid excludes them)
+        // Dim unrelated nodes
         return {
           ...data,
           type: 'circle',
-          size: Math.max(1.8, size * 0.6),
+          size: Math.max(0.8, size * 0.6),
           color: hexToRgba('#324155', 0.12),
           label: null,
           forceLabel: false,
           isSelected: false,
+          isNeighbor: false,
           zIndex: 0
         };
       }
@@ -501,42 +555,43 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         return {
           ...data,
           type: 'circle',
-          size: Math.max(1.8, size * 0.5),
+          size: Math.max(0.8, size * 0.5),
           color: hexToRgba('#324155', 0.08),
           label: null,
           forceLabel: false,
           isSelected: false,
+          isNeighbor: false,
           zIndex: 0
         };
       }
 
-      // 3. Global Constellation View:
-      // In FAR tier (zoomed all the way out), no labels or images (pure starry constellation)
+      // 3. Global Constellation View across Zoom Tiers:
+      let showLabel = false;
+      const subs = typeof data.subscribers === 'number' ? data.subscribers : 0;
       if (tier === 'FAR') {
-        return {
-          ...data,
-          type: 'circle',
-          size,
-          color: originalColor,
-          label: null,
-          forceLabel: false,
-          isSelected: false,
-          zIndex: 1
-        };
+        // Global overview: only landmark global mega-artists (top superstars)
+        showLabel = Boolean(data.isHeadliner && (subs >= 20_000_000 || size >= 11.0));
+      } else if (tier === 'MACRO') {
+        // Continental view: all headliners + prominent artists
+        showLabel = Boolean(data.isHeadliner || size >= 7.0 || subs >= 5_000_000);
+      } else if (tier === 'MESO') {
+        // Cluster view: headliners + mid-tier artists
+        showLabel = Boolean(data.isHeadliner || size >= 4.0 || subs >= 1_000_000);
+      } else {
+        // MICRO: all nodes in viewport
+        showLabel = true;
       }
 
-      // Default Global View: Sigma's native labelGrid + labelRenderedSizeThreshold automatically
-      // selects which artists are displayed based on continuous zoom ratio.
-      // defaultDrawNodeLabel renders the avatar image and name together in lockstep!
       return {
         ...data,
         type: 'circle',
         size,
         color: originalColor,
-        label: originalLabel,
-        forceLabel: false,
+        label: showLabel ? originalLabel : null,
+        forceLabel: Boolean(data.isHeadliner),
         isSelected: false,
-        zIndex: data.isHeadliner ? 10 : 1
+        isNeighbor: false,
+        zIndex: invertedZ
       };
     });
 
@@ -551,4 +606,3 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     />
   );
 });
-

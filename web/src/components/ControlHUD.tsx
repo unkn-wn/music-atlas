@@ -42,8 +42,8 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
         title="Filter by continent / musical genre"
       >
         <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-        <span className="max-w-[100px] truncate">
-          {activeContinent ? activeContinent.name.split('/')[0].trim() : 'Continents'}
+        <span className="max-w-[110px] truncate">
+          {activeContinent ? activeContinent.name : 'Continents'}
         </span>
         <ChevronDown className="w-3.5 h-3.5 text-slate-400 ml-0.5" />
       </button>

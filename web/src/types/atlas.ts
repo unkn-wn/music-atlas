@@ -18,15 +18,21 @@ export interface AtlasNode {
   color: string;
   continentId: number;
   continentName: string;
+  communityId?: number;
+  communityName?: string;
   popularity: number;
   followers: number;
   monthlyListeners?: number;
+  subscribers?: number;
+  subscribersFormatted?: string;
+  primaryGenre?: string;
   image: string;
   previewUrl: string;
-  topTrack: string;
   spotifyUrl: string;
   genres: string[];
+  topSubgenres?: string[];
   macroGenre: string;
+  sharedPlaylistsCount?: number;
   topCrossovers: CrossoverNeighbor[];
 }
 
@@ -42,6 +48,7 @@ export interface AtlasEdge {
   rawSharedPlaylists: number;
   crossoverSourcePercent: number;
   crossoverTargetPercent: number;
+  isBridge?: boolean;
 }
 
 export interface Continent {

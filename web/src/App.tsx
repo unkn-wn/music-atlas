@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useTransition } from 'react';
 import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2 } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
@@ -11,6 +11,7 @@ import { AtlasNode } from './types/atlas';
 export const App: React.FC = () => {
   const { data, graph, loading, error } = useGraphData();
   const canvasRef = useRef<AtlasCanvasHandle | null>(null);
+  const [, startTransition] = useTransition();
 
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
@@ -28,9 +29,11 @@ export const App: React.FC = () => {
   // Drawer artist bound strictly to deliberate selection
   const drawerArtist = selectedArtist;
 
-  // Handlers
+  // Handlers with React 19 transition for non-blocking UI
   const handleSelectArtist = (id: string | null) => {
-    setSelectedArtistId(id);
+    startTransition(() => {
+      setSelectedArtistId(id);
+    });
     if (id && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
@@ -63,7 +66,7 @@ export const App: React.FC = () => {
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center">
           <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing 800+ dynamic artists across streaming playlists...</p>
+          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
         </div>
       </div>
     );
@@ -103,7 +106,7 @@ export const App: React.FC = () => {
               MUSIC ATLAS
             </span>
             <span className="hidden lg:inline-block text-[11px] font-mono text-slate-400">
-              {data.metadata.nodeCount} artists &bull; {data.metadata.edgeCount.toLocaleString()} bridges
+              {data.metadata.nodeCount.toLocaleString()} artists &bull; {data.metadata.edgeCount.toLocaleString()} bridges
             </span>
           </div>
         </div>
@@ -203,13 +206,14 @@ export const App: React.FC = () => {
               About Music Atlas
             </h3>
             <p className="text-sm text-slate-300 leading-relaxed mb-4">
-              <strong>Music Atlas</strong> is a 2D spatial network visualization of the global music streaming landscape, modeled directly after the iconic <strong>Twitch Atlas</strong>.
+              <strong>Music Atlas</strong> is an autonomous 2D spatial network visualization of the global music streaming landscape, powered by empirical EveryNoise taxonomy ingestion and public YouTube Music human community curations.
             </p>
             <ul className="text-xs text-slate-300 space-y-2 mb-6 list-disc pl-4 font-normal">
-              <li><strong>Constellations (Nodes):</strong> 800+ dynamically harvested artists sized strictly proportional to monthly listeners across the galaxy.</li>
-              <li><strong>Spiderweb Filaments (Edges):</strong> Inward-curved crossover bridges connecting genres and communities from live public streaming playlists.</li>
-              <li><strong>Focus Mode:</strong> Clicking any artist illuminates their direct neighborhood in genre color with shared playlist crossover percentages.</li>
-              <li><strong>Audio Discovery:</strong> 30-second streaming audio previews powered by live iTunes search integration.</li>
+              <li><strong>Zero Developer Selection Bias:</strong> Systematic EveryNoise genre taxonomy ingestion spanning thousands of micro-genres and underground scenes.</li>
+              <li><strong>Universal Empirical Sizing:</strong> Artist nodes sized strictly proportional to public YouTube Music subscriber counts.</li>
+              <li><strong>Spiderweb Filaments:</strong> Inward-curved Bézier crossover bridges derived from real multi-artist human playlist co-occurrences.</li>
+              <li><strong>Adaptive Focus Mode:</strong> Clicking any artist reveals their top 6 to 20 most prominent connections with relative affinity bars.</li>
+              <li><strong>Multi-Subgenre Tagging:</strong> Preserves the top 3 most prominent subgenres per artist with audio preview streams.</li>
             </ul>
             <button
               onClick={() => setShowAbout(false)}

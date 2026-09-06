@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, X, Music, Radio } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
 interface SearchBarProps {
@@ -46,15 +46,23 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Filter matching artists
+  // Filter matching artists across name, primary genre, top subgenres, macro genre, and tags
   const filteredArtists = query.trim() === ''
     ? []
     : nodes.filter((node) => {
         const q = query.toLowerCase();
+        const label = node.label || '';
+        const macro = node.macroGenre || '';
+        const primary = node.primaryGenre || '';
+        const genres = node.genres || [];
+        const topSubgenres = node.topSubgenres || [];
+
         return (
-          node.label.toLowerCase().includes(q) ||
-          node.macroGenre.toLowerCase().includes(q) ||
-          node.genres.some((g) => g.toLowerCase().includes(q))
+          label.toLowerCase().includes(q) ||
+          primary.toLowerCase().includes(q) ||
+          macro.toLowerCase().includes(q) ||
+          genres.some((g) => g && g.toLowerCase().includes(q)) ||
+          topSubgenres.some((g) => g && g.toLowerCase().includes(q))
         );
       }).slice(0, 8);
 
@@ -77,7 +85,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             setIsOpen(true);
           }}
           onFocus={() => setIsOpen(true)}
-          placeholder="Search artist, genre, or continent... (Ctrl+K)"
+          placeholder="Search artist, genre, or subgenre... (Ctrl+K)"
           className="w-full bg-transparent border-none outline-none text-sm text-slate-100 placeholder-slate-500"
         />
         {query && (
@@ -98,42 +106,45 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
       {/* Autocomplete Dropdown */}
       {isOpen && filteredArtists.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-2 glass-panel p-1.5 shadow-2xl z-50 max-h-96 overflow-y-auto">
-          {filteredArtists.map((artist) => (
-            <button
-              key={artist.id}
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleSelect(artist.id);
-              }}
-              onClick={() => handleSelect(artist.id)}
-              className={`w-full flex items-center gap-3 p-2 rounded-lg cursor-pointer text-left transition-colors ${
-                selectedArtistId === artist.id ? 'bg-white/15' : 'hover:bg-white/10'
-              }`}
-            >
-              <img
-                src={artist.image}
-                alt={artist.label}
-                className="w-9 h-9 rounded-full object-cover shrink-0 border border-white/20"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
+        <div className="absolute left-0 right-0 top-full mt-2 glass-panel p-1.5 shadow-2xl z-50 max-h-96 overflow-y-auto border border-white/20">
+          {filteredArtists.map((artist) => {
+            const subtitle = `${artist.continentName || artist.primaryGenre} • ${artist.topSubgenres?.[0] || 'Artist'}`;
+
+            return (
+              <button
+                key={artist.id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
                 }}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white truncate">{artist.label}</span>
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: artist.color }}
-                  />
+                onClick={() => handleSelect(artist.id)}
+                className={`w-full flex items-center gap-3 p-2 rounded-lg cursor-pointer text-left transition-colors ${
+                  selectedArtistId === artist.id ? 'bg-white/15' : 'hover:bg-white/10'
+                }`}
+              >
+                <img
+                  src={artist.image}
+                  alt={artist.label}
+                  className="w-9 h-9 rounded-full object-cover shrink-0 border border-white/20"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-white truncate">{artist.label}</span>
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: artist.color }}
+                    />
+                  </div>
+                  <div className="text-xs text-slate-400 truncate">
+                    {subtitle}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-400 truncate">
-                  {artist.continentName} &bull; {artist.popularity} Pop.
-                </div>
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

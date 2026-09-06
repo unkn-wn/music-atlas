@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, ExternalLink, Music2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, ExternalLink } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
 interface AudioPlayerBarProps {
@@ -20,7 +20,6 @@ async function fetchFreshPreview(artistName: string): Promise<string | null> {
     const cleanup = () => {
       if (resolved) return;
       resolved = true;
-      // Replace with no-op to prevent Uncaught TypeError if response arrives after timeout
       (window as any)[cb] = () => {
         delete (window as any)[cb];
       };
@@ -62,6 +61,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   onTogglePlay
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const resolvedPreviewsRef = useRef<Map<string, string>>(new Map());
+  const failedUrlsRef = useRef<Set<string>>(new Set());
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(30);
   const [currentTime, setCurrentTime] = useState(0);
@@ -74,10 +75,9 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     let isMounted = true;
 
     const loadAndPlay = async () => {
-      let src = currentArtist.previewUrl;
+      let src = resolvedPreviewsRef.current.get(currentArtist.id) || currentArtist.previewUrl;
 
       const audioElement = audioRef.current;
-      // Immediately pause prior playback when artist changes
       if (audioElement && audioElement.src && (!src || audioElement.src !== src)) {
         audioElement.pause();
       }
@@ -88,7 +88,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         if (!isMounted) return;
         if (fresh) {
           src = fresh;
-          currentArtist.previewUrl = fresh;
+          resolvedPreviewsRef.current.set(currentArtist.id, fresh);
         } else {
           if (isPlaying) onTogglePlay();
           return;
@@ -112,8 +112,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           }
           const recovered = await fetchFreshPreview(currentArtist.label);
           if (recovered && audioRef.current && isMounted) {
+            resolvedPreviewsRef.current.set(currentArtist.id, recovered);
             audioRef.current.src = recovered;
-            currentArtist.previewUrl = recovered;
             audioRef.current.play().catch(() => onTogglePlay());
           } else {
             onTogglePlay();
@@ -178,14 +178,23 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onEnded={() => onTogglePlay()}
         onError={async () => {
-          console.warn("Audio element error, recovering with fresh preview stream...");
           if (currentArtist && audioRef.current) {
-            const fresh = await fetchFreshPreview(currentArtist.label);
-            if (fresh && isPlaying) {
-              audioRef.current.src = fresh;
-              currentArtist.previewUrl = fresh;
-              audioRef.current.play().catch(() => {});
-              return;
+            const currentSrc = audioRef.current.src;
+            if (currentSrc) {
+              failedUrlsRef.current.add(currentSrc);
+            }
+            // Only attempt fallback recovery once per artist to prevent unbounded retry loops
+            const alreadyRecovered = resolvedPreviewsRef.current.has(currentArtist.id);
+            if (!alreadyRecovered) {
+              const fresh = await fetchFreshPreview(currentArtist.label);
+              if (fresh && !failedUrlsRef.current.has(fresh) && isPlaying) {
+                resolvedPreviewsRef.current.set(currentArtist.id, fresh);
+                if (audioRef.current) {
+                  audioRef.current.src = fresh;
+                  audioRef.current.play().catch(() => onTogglePlay());
+                  return;
+                }
+              }
             }
           }
           if (isPlaying) onTogglePlay();
@@ -199,6 +208,9 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             src={currentArtist.image}
             alt={currentArtist.label}
             className="w-full h-full object-cover"
+            onError={(e) => {
+              (e.target as HTMLElement).style.display = 'none';
+            }}
           />
           {isPlaying && (
             <div className="absolute inset-0 bg-black/40 flex items-center justify-center gap-0.5">
@@ -209,10 +221,10 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           )}
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-bold text-white truncate">{currentArtist.topTrack}</div>
+          <div className="text-xs font-bold text-white truncate">{currentArtist.label}</div>
           <div className="text-[11px] text-slate-400 truncate flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: currentArtist.color }} />
-            <span>{currentArtist.label}</span>
+            <span>{currentArtist.primaryGenre || currentArtist.macroGenre || 'Audio Preview'}</span>
           </div>
         </div>
       </div>

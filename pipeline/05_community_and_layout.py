@@ -24,10 +24,9 @@ import math
 import random
 import argparse
 from collections import Counter, defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 import numpy as np
 import networkx as nx
-import fa2
 from scipy.spatial import cKDTree
 from tqdm import tqdm
 
@@ -46,24 +45,19 @@ SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 COMMUNITIES_FILE = os.path.join(OUTPUT_DIR, "communities.json")
 LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 
-# Perceptually distinct, vibrant macro-continent palette
+# Perceptually distinct, vibrant 64-continent palette
 CONTINENT_PALETTE = [
-    "#10B981",  # Emerald Green (Hip-Hop / Rap)
-    "#EC4899",  # Hot Pink / Magenta (Pop)
-    "#F59E0B",  # Amber / Warm Gold (Indie / Alternative)
-    "#06B6D4",  # Electric Cyan (EDM / Electronic)
-    "#EF4444",  # Crimson / Ruby (Rock / Metal)
-    "#8B5CF6",  # Deep Violet / Purple (R&B / Soul)
-    "#EAB308",  # Sunshine Yellow (Latin / Reggaeton)
-    "#D97706",  # Ochre / Terracotta (Country / Folk)
-    "#F43F5E",  # Rose / Coral (K-Pop / Asian Pop)
-    "#6366F1",  # Indigo (Jazz / Blues)
-    "#14B8A6",  # Teal / Mint (Classical / Ambient)
-    "#3B82F6",  # Royal Blue (UK Drill / Grime)
-    "#84CC16",  # Lime Green (Hyperpop / Glitch)
-    "#A855F7",  # Bright Orchid (Neo-Psychedelic)
-    "#00E5FF",  # Electric Cyan
-    "#D946EF",  # Fuchsia
+    "#10B981", "#EC4899", "#F59E0B", "#06B6D4", "#EF4444", "#8B5CF6",
+    "#EAB308", "#D97706", "#F43F5E", "#6366F1", "#14B8A6", "#3B82F6",
+    "#84CC16", "#A855F7", "#00E5FF", "#D946EF", "#FB923C", "#4ADE80",
+    "#38BDF8", "#C084FC", "#F87171", "#FACC15", "#2DD4BF", "#818CF8",
+    "#FB7185", "#A3E635", "#22D3EE", "#E879F9", "#F472B6", "#FDE047",
+    "#34D399", "#60A5FA", "#C4B5FD", "#FDA4AF", "#A7F3D0", "#FCD34D",
+    "#0284C7", "#059669", "#D97706", "#7C3AED", "#DB2777", "#DC2626",
+    "#65A30D", "#0D9488", "#2563EB", "#9333EA", "#C026D3", "#E11D48",
+    "#CA8A04", "#16A34A", "#0891B2", "#4F46E5", "#7E22CE", "#BE185D",
+    "#B91C1C", "#4D7C0F", "#0F766E", "#1D4ED8", "#6D28D9", "#A21CAF",
+    "#9F1239", "#A16207", "#15803D", "#0E7490"
 ]
 
 def format_genre_name(name: str) -> str:
@@ -77,149 +71,211 @@ def format_genre_name(name: str) -> str:
         "edm": "EDM",
         "k-pop": "K-Pop",
         "j-pop": "J-Pop",
+        "j-rock": "J-Rock",
         "ost": "OST",
         "uk": "UK",
-        "idm": "IDM"
+        "idm": "IDM",
+        "opm": "OPM",
+        "mpb": "MPB",
+        "nz": "NZ",
+        "v-pop": "V-Pop"
     }
     parts = name.split()
     return " ".join(acronym_map.get(p.lower(), p.title()) for p in parts)
 
-def run_two_phase_layout(
+def run_archipelago_layout(
     G: nx.Graph,
     catalog_map: Dict[str, Dict],
-    iter_macro: int = 450,
-    iter_micro: int = 120,
-    canvas_bound: float = 1350.0
+    communities: List[Set[str]],
+    canvas_bound: float = 3200.0,
+    num_iters: int = 180
 ) -> Dict[str, Tuple[float, float]]:
     """
-    Organic ForceAtlas2 Layout Simulation:
-    - Pure LinLog Mode: Logarithmic attraction (linLogMode=True, strongGravityMode=False, gravity=0.35, scalingRatio=6.5)
-      Guarantees mathematically bounded repulsion forces without 1/d^2 explosion, preventing any outlier slingshot.
-    - Local Settling: Phase 2 with gentle scalingRatio=8.0 and gravity=0.30 to settle micro-constellations.
-    - Soft Optical Clearance: Relieves actual visual circle overlaps without forcing an uncanny equidistant grid.
+    Two-Level Hierarchical Archipelago Layout with Subgenre Micro-Clustering:
+    1. Level 1 (Macro Continents):
+       Computes inter-continent affinity across ~64 thematic territories and uses
+       spring layout to position continent centroids across a wide disc (radius ~2400).
+    2. Level 2 (Intra-Continent Subgenre Micro-Clusters):
+       Within each continent, groups artists by their primary subgenre. Positions distinct
+       micro-centroids spaced 120-350px around the continent centroid so Boom Bap, Trap,
+       and Emo Rap don't pancake on top of each other.
+    3. Vectorized Multi-Body Physics:
+       Intra-cluster spring forces pull collaborators together while centroid and micro-centroid
+       anchors preserve island identity and separate subgenre peninsulas.
+    4. Soft Optical Clearance:
+       Relieves avatar circle overlaps without artificial grid distortion.
     """
     if not G.nodes():
         return {}
 
-    # Deterministic compact initialization near origin
-    np.random.seed(42)
-    random.seed(42)
-    init_pos = {
-        node: (float(np.random.uniform(-50.0, 50.0)), float(np.random.uniform(-50.0, 50.0)))
-        for node in G.nodes()
-    }
-
-    # Phase 1: Stable LinLog Macro Galaxy Spreading
-    print(f"  Phase 1: ForceAtlas2 LinLog Galaxy Spreading ({iter_macro} iterations)...")
-    fa2_phase1 = fa2.ForceAtlas2(
-        outboundAttractionDistribution=False,
-        linLogMode=True,
-        adjustSizes=False,
-        edgeWeightInfluence=1.0,
-        jitterTolerance=1.0,
-        barnesHutOptimize=True,
-        barnesHutTheta=0.7,
-        scalingRatio=6.5,
-        strongGravityMode=False,
-        gravity=0.35,
-        verbose=False
-    )
-    pos_dict = fa2_phase1.forceatlas2_networkx_layout(
-        G, pos=init_pos, iterations=iter_macro, weight_attr="weight"
-    )
-
-    # Phase 2: Gentle Local Constellation Settling (stable parameters, no 1/d^2 explosion)
-    print(f"  Phase 2: Local Constellation Settling ({iter_micro} iterations)...")
-    fa2_phase2 = fa2.ForceAtlas2(
-        outboundAttractionDistribution=False,
-        linLogMode=True,
-        adjustSizes=False,
-        edgeWeightInfluence=0.8,
-        jitterTolerance=0.8,
-        barnesHutOptimize=True,
-        barnesHutTheta=0.7,
-        scalingRatio=8.0,
-        strongGravityMode=False,
-        gravity=0.30,
-        verbose=False
-    )
-    pos_dict = fa2_phase2.forceatlas2_networkx_layout(
-        G, pos=pos_dict, iterations=iter_micro, weight_attr="weight"
-    )
-
     nodes = list(G.nodes())
-    pos = np.array([pos_dict[node] for node in nodes], dtype=np.float64)
+    N = len(nodes)
+    node_to_idx = {n: i for i, n in enumerate(nodes)}
+    K = len(communities)
 
-    # 1. Center coordinates around median to prevent outlier pull
+    node_comm_idx = np.zeros(N, dtype=np.int32)
+    for c_idx, comm in enumerate(communities):
+        for u in comm:
+            if u in node_to_idx:
+                node_comm_idx[node_to_idx[u]] = c_idx
+
+    edges = list(G.edges(data=True))
+    src_indices = np.array([node_to_idx[u] for u, v, _ in edges], dtype=np.int32)
+    dst_indices = np.array([node_to_idx[v] for u, v, _ in edges], dtype=np.int32)
+    weights = np.array([float(d.get("weight", 0.5)) for _, _, d in edges], dtype=np.float32)
+
+    # 1. Level 1: Macro-Archipelago Arrangement
+    print(f"  Level 1: Calculating inter-continent affinity for {K} continents...")
+    inter_aff = np.zeros((K, K), dtype=np.float32)
+    for s, d, w in zip(src_indices, dst_indices, weights):
+        c1, c2 = node_comm_idx[s], node_comm_idx[d]
+        if c1 != c2:
+            inter_aff[c1, c2] += w
+            inter_aff[c2, c1] += w
+
+    macro_G = nx.Graph()
+    for i in range(K):
+        macro_G.add_node(i)
+    for i in range(K):
+        for j in range(i + 1, K):
+            if inter_aff[i, j] > 0.1:
+                macro_G.add_edge(i, j, weight=float(inter_aff[i, j]))
+
+    c_pos_dict = nx.spring_layout(macro_G, weight="weight", seed=42, iterations=400)
+    c_pos = np.array([c_pos_dict[i] for i in range(K)], dtype=np.float32)
+    c_radii = np.linalg.norm(c_pos, axis=1, keepdims=True) + 1e-4
+    macro_radius = canvas_bound * 0.55
+    c_pos = (c_pos / np.max(c_radii)) * macro_radius
+
+    # 2. Level 2: Subgenre Micro-Centroids within each Continent
+    print(f"  Level 2: Partitioning subgenre micro-centroids within each of the {K} continents...")
+    np.random.seed(42)
+    node_target_centers = np.zeros((N, 2), dtype=np.float32)
+
+    for c_idx, comm in enumerate(communities):
+        c_center = c_pos[c_idx]
+        subg_members = {}
+        for u in comm:
+            subs = catalog_map.get(u, {}).get("topSubgenres", ["Other"])
+            p = subs[0] if subs else "Other"
+            subg_members.setdefault(p, []).append(u)
+
+        num_subgs = len(subg_members)
+        if num_subgs == 1:
+            for u in comm:
+                node_target_centers[node_to_idx[u]] = c_center
+            continue
+
+        # Sort subgenres by size so major subgenres get dedicated outer orbits
+        sorted_subgs = sorted(subg_members.items(), key=lambda x: len(x[1]), reverse=True)
+        subg_angles = np.linspace(0, 2 * np.pi, num_subgs, endpoint=False)
+
+        for s_i, (subg, members) in enumerate(sorted_subgs):
+            ang = subg_angles[s_i]
+            # Spread subgenres across radial distance (90px to 360px)
+            r_sub = 90.0 + min(270.0, math.sqrt(len(members)) * 28.0)
+            sub_center = c_center + np.array([r_sub * np.cos(ang), r_sub * np.sin(ang)], dtype=np.float32)
+            for u in members:
+                node_target_centers[node_to_idx[u]] = sub_center
+
+    # Seed artists with small initial jitter around their specific subgenre micro-center
+    rand_ang = np.random.uniform(0, 2 * np.pi, N).astype(np.float32)
+    rand_r = np.random.uniform(8, 65, N).astype(np.float32)
+    pos = (node_target_centers + np.stack([rand_r * np.cos(rand_ang), rand_r * np.sin(rand_ang)], axis=1)).astype(np.float32)
+
+    # 3. Vectorized Physics Simulation
+    print(f"  Level 3: Vectorized archipelago spring physics ({num_iters} iterations)...")
+    is_intra = (node_comm_idx[src_indices] == node_comm_idx[dst_indices])
+    eff_weights = weights.copy()
+    eff_weights[~is_intra] *= 0.35
+
+    vel = np.zeros_like(pos)
+    for it in range(num_iters):
+        force = np.zeros_like(pos)
+
+        # Edge attraction
+        diff = pos[dst_indices] - pos[src_indices]
+        dist = np.linalg.norm(diff, axis=1, keepdims=True) + 1e-3
+        spring_mag = eff_weights[:, np.newaxis] * dist * 0.04
+        edge_f = (diff / dist) * spring_mag
+        np.add.at(force, src_indices, edge_f)
+        np.add.at(force, dst_indices, -edge_f)
+
+        # Micro-center anchor spring
+        force += (node_target_centers - pos) * 0.035
+
+        # Damping and cooling schedule
+        temp = 1.0 - (it / num_iters) * 0.75
+        vel = (vel + force * 0.05) * 0.85 * temp
+        step_mag = np.linalg.norm(vel, axis=1, keepdims=True) + 1e-4
+        capped = np.minimum(step_mag, 28.0 * temp)
+        vel = (vel / step_mag) * capped
+        pos += vel
+
+    # 4. Center and normalize coordinates to target canvas bounds
     pos -= np.median(pos, axis=0)
-
-    # 2. Isotropic Percentile Scaling (maps 99.5% of nodes into 88% of canvas, leaving margins)
     radii = np.linalg.norm(pos, axis=1)
     r99 = float(np.percentile(radii, 99.5)) or 1.0
     target_radius = canvas_bound * 0.88
     pos = (pos / r99) * target_radius
 
-    # Gently damp any extreme outlier beyond 1.15 * target_radius
-    max_allowed = canvas_bound * 0.95
+    max_allowed = canvas_bound * 0.96
     new_radii = np.linalg.norm(pos, axis=1)
     outlier_mask = new_radii > max_allowed
     if np.any(outlier_mask):
         scale = max_allowed / new_radii[outlier_mask]
         pos[outlier_mask] *= scale[:, np.newaxis]
 
-    # 3. Soft Optical Clearance: strictly for directly touching/overlapping circles
-    print("  Stage 3: Soft Optical Anti-Overlap Clearance (preserving natural density variations)...")
+    # 5. Soft Optical Anti-Overlap Clearance
+    print("  Level 4: Soft Optical Clearance for touching node discs...")
     all_subs = [max(1000, catalog_map.get(n, {}).get("subscribers", 1000)) for n in nodes]
-    s_min, s_max = min(all_subs) if all_subs else 1000, max(all_subs) if all_subs else 50_000_000
+    s_min = min(all_subs) if all_subs else 1000
+    s_max = max(all_subs) if all_subs else 50_000_000
     diff = (math.sqrt(s_max) - math.sqrt(s_min)) or 1.0
 
-    # True visual display radii: 1.1px to 22.6px
     node_radii = np.array([
-        1.1 + (((math.sqrt(max(1000, catalog_map.get(n, {}).get("subscribers", 1000))) - math.sqrt(s_min)) / diff) ** 1.3) * 21.5
+        1.1 + (((math.sqrt(max(1000, catalog_map.get(n, {}).get("subscribers", 1000))) - math.sqrt(s_min)) / diff) ** 1.3) * 15.0
         for n in nodes
     ])
-    max_check = float(np.max(node_radii) * 2.0 + 2.0)
+    max_check = float(np.max(node_radii) * 2.0 + 3.0)
 
-    # Damped soft relaxation: only pushes nodes if they literally touch visually
-    for _ in range(20):
+    for _ in range(25):
         tree = cKDTree(pos)
         pairs = tree.query_pairs(r=max_check)
         if not pairs:
             break
         moved = False
         for i, j in pairs:
-            req = node_radii[i] + node_radii[j] + 1.2
+            req = node_radii[i] + node_radii[j] + 2.0
             delta = pos[j] - pos[i]
-            dist = np.linalg.norm(delta)
-            if dist < 0.001:
+            d = np.linalg.norm(delta)
+            if d < 0.001:
                 delta = np.random.uniform(-0.1, 0.1, size=2)
-                dist = max(1e-4, float(np.linalg.norm(delta)))
-            if dist < req:
-                overlap = (req - dist) * 0.25  # Soft damping prevents grid formation
-                shift = (delta / dist) * overlap
+                d = max(1e-4, float(np.linalg.norm(delta)))
+            if d < req:
+                overlap = (req - d) * 0.28
+                shift = (delta / d) * overlap
                 pos[i] -= shift
                 pos[j] += shift
                 moved = True
         if not moved:
             break
 
-    # Final center around origin
     pos -= np.mean(pos, axis=0)
-
     return {node: (round(float(pos[i, 0]), 2), round(float(pos[i, 1]), 2)) for i, node in enumerate(nodes)}
 
 def main():
-    parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & ForceAtlas2 Layout.")
-    parser.add_argument("--iter-macro", type=int, default=450, help="Phase 1 LinLog iterations (default: 450)")
-    parser.add_argument("--iter-micro", type=int, default=120, help="Phase 2 refinement iterations (default: 120)")
-    parser.add_argument("--canvas-bound", type=float, default=1350.0, help="Canvas coordinate half-width (default: 1350.0)")
+    parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & Archipelago Layout.")
+    parser.add_argument("--num-iters", type=int, default=300, help="Vectorized physics iterations (default: 300)")
+    parser.add_argument("--canvas-bound", type=float, default=3200.0, help="Canvas coordinate half-width (default: 3200.0)")
+    parser.add_argument("--target-continents", type=int, default=64, help="Target macro continents count (default: 64)")
     args = parser.parse_args()
 
     if not os.path.exists(EDGES_FILE) or not os.path.exists(CATALOG_FILE):
         raise FileNotFoundError("Missing Stage 4 inputs. Run earlier pipeline stages first.")
 
     print("=" * 70)
-    print(" STAGE 4C: LOUVAIN CONTINENTS & ORGANIC FORCEATLAS2 GALAXY PHYSICS")
+    print(" STAGE 4C: 64 LOUVAIN CONTINENTS & GALAXY ARCHIPELAGO PHYSICS")
     print("=" * 70)
     start_time = time.time()
 
@@ -249,15 +305,15 @@ def main():
 
     print(f"Graph loaded with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
-    # 1. Topological Louvain Community Detection
-    print("Detecting topological communities via Louvain modularity optimization...")
-    raw_comms = [set(c) for c in nx.community.louvain_communities(G, weight="weight", resolution=1.0, seed=42)]
+    # 1. Topological Louvain Community Detection (Resolution 1.6 for 64 cohesive territories)
+    print("Detecting topological communities via Louvain modularity optimization (resolution=1.6)...")
+    raw_comms = [set(c) for c in nx.community.louvain_communities(G, weight="weight", resolution=1.6, seed=42)]
     print(f"Raw Louvain communities detected: {len(raw_comms)}")
 
-    # Iterative Agglomerative Merge: merge smallest communities until <= 16 and all >= 35 artists
+    # Iterative Agglomerative Merge: merge smallest communities until <= target_continents (64) and all >= 25 artists
     communities = sorted(raw_comms, key=len, reverse=True)
 
-    while len(communities) > 16 or any(len(c) < 35 for c in communities):
+    while len(communities) > args.target_continents or any(len(c) < 25 for c in communities):
         c_small = min(communities, key=len)
         communities.remove(c_small)
 
@@ -335,8 +391,11 @@ def main():
             "artistIds": sorted_members
         })
 
+        dominant_genre = top_genres[0] if top_genres else title
         for a_id in sorted_members:
-            raw_primary = catalog_map.get(a_id, {}).get("primaryGenre") or "Other"
+            raw_primary = catalog_map.get(a_id, {}).get("primaryGenre")
+            if not raw_primary or raw_primary == "Other":
+                raw_primary = dominant_genre
             artist_continent_map[a_id] = {
                 "continentId": idx,
                 "continentName": title,
@@ -358,14 +417,14 @@ def main():
         }, f, indent=2)
     print(f"\nSaved {COMMUNITIES_FILE}")
 
-    # 3. Two-Phase ForceAtlas2 Layout Simulation
+    # 3. Two-Level Hierarchical Archipelago Layout Simulation
     print("\nStarting Spatial Layout Simulation...")
-    coords = run_two_phase_layout(
+    coords = run_archipelago_layout(
         G,
         catalog_map,
-        iter_macro=args.iter_macro,
-        iter_micro=args.iter_micro,
-        canvas_bound=args.canvas_bound
+        communities,
+        canvas_bound=args.canvas_bound,
+        num_iters=args.num_iters
     )
 
     normalized_coords = {

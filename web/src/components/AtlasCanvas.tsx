@@ -195,12 +195,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       labelDensity: 0.65,
       labelGridCellSize: 80,
       labelRenderedSizeThreshold: 6,
-      minCameraRatio: 0.015,
-      maxCameraRatio: 2.0,
+      minCameraRatio: 0.008,
+      maxCameraRatio: 2.2,
       enableEdgeEvents: false,
       allowInvalidContainer: true,
       stagePadding: 80,
-      defaultEdgeColor: 'rgba(148, 163, 184, 0.18)',
+      defaultEdgeColor: 'rgba(148, 163, 184, 0.14)',
       defaultNodeColor: '#94a3b8',
       defaultEdgeType: 'curve',
       defaultNodeType: 'circle',
@@ -219,22 +219,21 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const tier = zoomTierRef.current;
 
         // Hierarchical avatar rendering policy across zoom tiers:
-        // - At FAR: Only landmark superstars or selected artist
-        // - At MACRO: Headliners, prominent artists, selected, or neighbors
-        // - At MESO: Headliners, prominent, and mid-tier artists
-        // - At MICRO (close-up): ALL artists with valid images render their avatar!
+        // - At FAR: Only landmark superstars (>= 20M subscribers)
+        // - At MACRO: Headliners and prominent artists
+        // - At MESO: Prominent artists with size >= 5.0
+        // - At MICRO (close-up): Prominent artists or selected/neighbor nodes
         const isMicro = tier === 'MICRO';
-        const isMesoOrCloser = tier === 'MESO' || isMicro;
-        const isLandmark = Boolean(data.isHeadliner && ((data.subscribers as number) >= 15_000_000 || radius >= 12.0));
-        const isProminent = Boolean(data.isHeadliner || radius >= 6.5 || ((data.subscribers as number) >= 3_000_000));
+        const isLandmark = Boolean(data.isHeadliner && ((data.subscribers as number) >= 20_000_000 || radius >= 11.0));
+        const isProminent = Boolean(data.isHeadliner || radius >= 5.5 || ((data.subscribers as number) >= 4_000_000));
 
         const shouldRenderAvatar = Boolean(
           data.image &&
           !data.image.includes('d41d8cd98f00b204e9800998ecf8427e') &&
           (data.isSelected ||
            data.isNeighbor ||
-           isMicro ||
-           (isMesoOrCloser && isProminent) ||
+           (isMicro && (isProminent || radius >= 3.0)) ||
+           (tier === 'MESO' && isProminent) ||
            (tier === 'MACRO' && data.isHeadliner) ||
            (tier === 'FAR' && isLandmark))
         );
@@ -576,7 +575,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       const src = cached ? cached.src : graph.source(edge);
       const dst = cached ? cached.dst : graph.target(edge);
       const tier = zoomTierRef.current;
-      const weight = cached ? cached.weight : (data.weight || 0.5);
 
       // 1. When an artist is selected: illuminate filaments connecting to the adaptive connections
       if (selectedNodeId) {
@@ -597,7 +595,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         } else {
           return {
             ...data,
-            hidden: true // Dim all unrelated edges
+            hidden: true
           };
         }
       }
@@ -609,24 +607,15 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         }
       }
 
-      // 3. Dynamic Edge Culling: at global zoom-out (FAR), hide weak edges (w < 0.22) unless it's a structural bridge
-      const isBridge = cached ? cached.isBridge : Boolean(data.isBridge);
-      if (tier === 'FAR' && weight < 0.22 && !isBridge) {
-        return { ...data, hidden: true };
-      }
-
-      // 4. Subtle, precomputed translucent filaments across all zoom levels
+      // 3. Always-visible translucent filaments with pre-computed tier colors
       const edgeColor = cached ? cached.colorByTier[tier] : 'rgba(148, 163, 184, 0.08)';
-      let sizeFactor = 0.13;
-      if (tier === 'MICRO') sizeFactor = 0.20;
-      else if (tier === 'MESO') sizeFactor = 0.17;
-      else if (tier === 'FAR') sizeFactor = 0.10;
+      const sizeFactor = tier === 'FAR' ? 0.08 : tier === 'MACRO' ? 0.12 : tier === 'MESO' ? 0.14 : 0.16;
 
       return {
         ...data,
         hidden: false,
         color: edgeColor,
-        size: Math.max(0.12, (cached ? cached.size : 1) * sizeFactor)
+        size: Math.max(0.10, (cached ? cached.size : 1) * sizeFactor)
       };
     });
 
@@ -700,35 +689,11 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         };
       }
 
-      // 3. Global Constellation View across Zoom Tiers:
-      let showLabel = false;
-      const subs = typeof data.subscribers === 'number' ? data.subscribers : 0;
-      if (tier === 'FAR') {
-        // Global overview: only landmark global mega-artists (superstars >= 25M subs or size >= 17.0)
-        showLabel = Boolean(subs >= 25_000_000 || size >= 17.0);
-      } else if (tier === 'MACRO') {
-        // Continental view: all headliners + prominent artists
-        showLabel = Boolean(data.isHeadliner || size >= 7.0 || subs >= 3_000_000);
-      } else if (tier === 'MESO') {
-        // Cluster view: headliners + prominent subgenre artists
-        showLabel = Boolean(data.isHeadliner || size >= 4.5 || subs >= 1_200_000);
-      } else {
-        // MICRO: all nodes in viewport (filtered strictly by screen-space collision grid)
-        showLabel = true;
-      }
-
-      // At FAR, force the ~15 landmark mega-artists so their avatars render on the dark galaxy.
-      // At intermediate/close zoom tiers, DO NOT force labels — Sigma's label grid
-      // and our screen-space collision grid will dynamically render the best non-overlapping names!
-      const forceThisLabel = Boolean(tier === 'FAR' && data.isHeadliner && subs >= 25_000_000);
-
       return {
         ...data,
         type: 'circle',
         size,
         color: originalColor,
-        label: showLabel ? originalLabel : null,
-        forceLabel: forceThisLabel,
         isSelected: false,
         isNeighbor: false,
         zIndex: invertedZ

@@ -1,6 +1,7 @@
 # Music Atlas (The Twitch Atlas for Music & Spotify)
 
 An interactive, high-performance WebGL spatial graph visualization of the music streaming landscape. Modeled after the iconic **Twitch Atlas**, Music Atlas transforms streaming playlists into an organic virtual map where:
+
 - **Node Size** represents artist popularity or listener reach.
 - **Node Color** represents distinct musical communities and genres (Louvain modularity + Oklab color space).
 - **Edges & Lines** represent listener crossover and audience overlap across playlists.
@@ -19,7 +20,7 @@ An interactive, high-performance WebGL spatial graph visualization of the music 
 - **Artist Drawer & Audio Preview**: Slide-over inspector panel with framed artist artwork, follower and popularity metrics, Spotify links, and clickable audience overlap percentage bars for neighbor hopping.
 - **Live 30s Audio Streamer**: Persistent bottom audio player bar streaming real 30-second AAC previews via cached iTunes Search catalog with progress scrubbing and volume controls.
 - **World Radar (Minimap)**: Bottom-left macro map showing your viewport position in relation to all musical continents.
-- **Sleek Minimalist HUD**: Clean floating top island bar inspired by `twitchmap.com` with dynamic threshold slider, popularity/degree size toggle, and collapsible continent popover.
+- **Sleek Minimalist HUD**: Clean floating top island bar inspired by `twitchmap.com` with a collapsible continent popover.
 
 ---
 
@@ -123,14 +124,14 @@ Open `http://localhost:5173` in your browser.
 
 ## Keyboard & Mouse Controls
 
-| Action | Control |
-| :--- | :--- |
-| **Pan** | Click & drag on canvas |
-| **Zoom** | Mouse scroll wheel or On-screen `+` / `−` buttons |
-| **Search** | Press `Ctrl+K` or `/` |
-| **Inspect Artist** | Click on any artist circle |
-| **Audio Preview** | Click Play on drawer card or press Space when drawer is open |
-| **Hop to Neighbor** | Click any crossover item in the artist drawer |
-| **Reset View** | Click on-screen target crosshair button or press Escape |
-| **Filter Continent** | Click any continent tag in the HUD |
-| **Crossover Threshold** | Drag the slider in the top-left HUD |
+| Action                  | Control                                                      |
+| :---------------------- | :----------------------------------------------------------- |
+| **Pan**                 | Click & drag on canvas                                       |
+| **Zoom**                | Mouse scroll wheel or On-screen `+` / `−` buttons            |
+| **Search**              | Press `Ctrl+K` or `/`                                        |
+| **Inspect Artist**      | Click on any artist circle                                   |
+| **Audio Preview**       | Click Play on drawer card or press Space when drawer is open |
+| **Hop to Neighbor**     | Click any crossover item in the artist drawer                |
+| **Reset View**          | Click on-screen target crosshair button or press Escape      |
+| **Filter Continent**    | Click any continent tag in the HUD                           |
+| **Crossover Threshold** | Drag the slider in the top-left HUD                          |

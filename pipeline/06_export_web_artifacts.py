@@ -166,10 +166,10 @@ def main():
         })
 
         subs = max(1000, meta.get("subscribers", 1000))
-        # Non-linear scaling: 1.1px for small/niche artists up to 23.0px for mega-artists
+        # Non-linear scaling: 1.1px for small/niche artists up to 14.5px for mega-artists (prevents node occlusion)
         ratio = (math.sqrt(subs) - sqrt_min) / sqrt_diff
         ratio = max(0.0, min(1.0, ratio))
-        node_size = round(1.1 + (ratio ** 1.3) * 21.5, 1)
+        node_size = round(1.1 + (ratio ** 1.3) * 13.4, 1)
 
         is_headliner = a_id in headliner_ids
         has_valid_image = bool(meta.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in meta.get("image", ""))

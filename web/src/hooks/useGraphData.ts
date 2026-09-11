@@ -23,11 +23,13 @@ export function useGraphData() {
         // Instantiate in-memory Graphology graph
         const g = new Graph({ type: 'undirected', multi: false });
 
-        // Add nodes (defaulting to circle so images are lazily loaded by zoom tier in nodeReducer)
+        // Add nodes: only prominent headliners/artists load image textures initially (prevents 13k texture blowout)
         bundle.nodes.forEach((node) => {
+          const hasImage = Boolean(node.image && !node.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
+          const isProminent = Boolean(node.isHeadliner || (node.size && node.size >= 3.2));
           g.addNode(node.id, {
             ...node,
-            type: 'circle',
+            type: hasImage && isProminent ? 'image' : 'circle',
             originalSize: node.size,
             originalColor: node.color,
             originalLabel: node.label

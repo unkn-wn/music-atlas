@@ -32,10 +32,11 @@ METADATA_REGEX = re.compile(
 
 # Curator handle patterns (e.g. maumau1968, DerrickB502222, HighFlyer186, Vovan105, ryanche33)
 HANDLE_REGEX = re.compile(
-    r'^(?:[A-Za-z]{3,}\d{3,}|[a-z]{3,}\d{2,})$'
+    r'^(?:[A-Za-z]{2,}\d{2,}|[a-z]{3,}\d+)$'
 )
 
-BLACKLIST = {
+# Generic system and non-artist placeholder terms
+GENERIC_SYSTEM_NAMES = {
     "various artists",
     "various artists - topic",
     "unknown",
@@ -48,24 +49,10 @@ BLACKLIST = {
     "music",
     "artist",
     "soundtrack",
-    "va",
-    "latinhype",
-    "rockhype",
-    "futurehype",
-    "r&bhype",
-    "cloudy hits",
-    "classic hits studio",
-    "new hits songs",
-    "backtothehits",
-    "bits & hits",
-    "moonfloated",
-    "1hit1ders",
-    "runcosweeklymusic",
-    "easymusic36",
-    "homegrown television",
-    "vovan105",
-    "maumau1968"
+    "va"
 }
+
+GEN_SUFFIXES = {'jr', 'jr.', 'sr', 'sr.', 'ii', 'iii', 'iv', 'v', 'esq', 'esq.'}
 
 def sanitize_artist_name(raw_name: Optional[str]) -> Optional[str]:
     """
@@ -84,10 +71,11 @@ def sanitize_artist_name(raw_name: Optional[str]) -> Optional[str]:
 
     # Lowercase checks
     lowered = name.lower()
-    if lowered in BLACKLIST:
+    if lowered in GENERIC_SYSTEM_NAMES:
         return None
 
-    if lowered.endswith(" reviews") or lowered.endswith(" channel") or lowered.endswith(" records"):
+    # Non-artist YouTube channel suffixes
+    if lowered.endswith((" reviews", " channel", " topic", " official")):
         return None
 
     # Must contain at least one alphabetic character (Unicode safe: Latin, CJK, Cyrillic, etc.)
@@ -115,30 +103,11 @@ def sanitize_artist_name(raw_name: Optional[str]) -> Optional[str]:
 
     return name
 
-LEGITIMATE_COMMA_ARTISTS = {
-    "tyler, the creator",
-    "earth, wind & fire",
-    "crosby, stills & nash",
-    "crosby, stills, nash & young",
-    "emerson, lake & palmer",
-    "blood, sweat & tears",
-    "bell, biv devoe",
-    "isley, jasper, isley",
-    "dream, ivory",
-    "oh, sleeper",
-    "grover washington, jr.",
-    "hank williams, jr.",
-    "10,000 maniacs",
-    "peter, paul and mary",
-    "tony, toni, toné",
-    "tony, toni, tone"
-}
-
 def split_artist_names(raw_name: Optional[str]) -> List[str]:
     """
-    Splits composite multi-artist strings (e.g. 'Arcangelo Corelli, The English Concert, Trevor Pinnock',
-    'Jessie J, Ariana Grande, Nicki Minaj') into individual authentic artist names,
-    while preserving genuine bands with commas like 'Tyler, The Creator' and 'Earth, Wind & Fire'.
+    Splits composite multi-artist strings (e.g. 'Jessie J, Ariana Grande, Nicki Minaj',
+    'Calvin Harris ft. Rihanna') into individual authentic artist names,
+    using structural and linguistic patterns (zero hardcoded artist names).
     """
     if not raw_name or not isinstance(raw_name, str):
         return []
@@ -147,62 +116,79 @@ def split_artist_names(raw_name: Optional[str]) -> List[str]:
     if not clean:
         return []
 
-    if clean.lower() in LEGITIMATE_COMMA_ARTISTS:
-        sanitized = sanitize_artist_name(clean)
-        return [sanitized] if sanitized else []
+    # Protect comma in numbers like '10,000 Maniacs'
+    num_protected = re.sub(r'(\d),(\d)', r'\1__NUMCOMMA__\2', clean)
 
-    # Protect legitimate comma artists with placeholders in case they are part of a multi-artist collaboration
-    placeholders = {}
-    modified = clean
-    for idx, band in enumerate(sorted(LEGITIMATE_COMMA_ARTISTS, key=len, reverse=True)):
-        pattern = re.compile(re.escape(band), re.IGNORECASE)
-        matches = pattern.findall(modified)
-        for m in matches:
-            ph = f"__COMMA_ARTIST_{idx}__"
-            placeholders[ph] = m
-            modified = pattern.sub(ph, modified, count=1)
+    # Split on collaboration markers (feat. / ft.)
+    feat_parts = re.split(r'(?i)\s+(?:ft\.?|feat\.?)\s+', num_protected)
 
-    # Split on comma followed by whitespace (prevents splitting 10,000 Maniacs if not in placeholder set)
-    if re.search(r',\s+', modified):
-        parts = [p.strip() for p in re.split(r',\s+', modified) if p.strip()]
-        results = []
-        seen = set()
-        gen_suffixes = {"jr", "sr", "ii", "iii", "iv", "v"}
-        for p in parts:
-            sub = p
-            if sub.startswith("& "):
-                sub = sub[2:].strip()
-            elif sub.lower().startswith("and "):
-                sub = sub[4:].strip()
+    all_artists: List[str] = []
+    seen = set()
 
-            # Restore placeholders
-            for ph, original in placeholders.items():
-                if ph in sub:
-                    sub = sub.replace(ph, original)
+    for part in feat_parts:
+        part = part.strip()
+        if not part:
+            continue
 
-            # Merge generational suffixes (e.g. Jr., Sr., III) back to preceding artist
-            if sub.lower().rstrip(".") in gen_suffixes and results:
-                prev = results[-1]
-                merged = f"{prev}, {p.strip()}"
-                sanitized_merged = sanitize_artist_name(merged)
-                if sanitized_merged:
-                    results[-1] = sanitized_merged
-                    seen.add(sanitized_merged.lower())
+        if ',' in part:
+            sub_segments = [s.strip() for s in part.split(',') if s.strip()]
+
+            # 1. Structural epithet check (e.g. 'Tyler, The Creator', 'Alexander, The Great')
+            if len(sub_segments) == 2 and re.match(r'^(?:the)\s+\w+$', sub_segments[1], re.IGNORECASE):
+                sanitized = sanitize_artist_name(part.replace('__NUMCOMMA__', ','))
+                if sanitized and sanitized.lower() not in seen:
+                    seen.add(sanitized.lower())
+                    all_artists.append(sanitized)
                 continue
 
-            sanitized = sanitize_artist_name(sub)
+            # 2. Structural suffix check (e.g. 'Grover Washington, Jr.')
+            if len(sub_segments) == 2 and sub_segments[1].lower().rstrip('.') in GEN_SUFFIXES:
+                sanitized = sanitize_artist_name(part.replace('__NUMCOMMA__', ','))
+                if sanitized and sanitized.lower() not in seen:
+                    seen.add(sanitized.lower())
+                    all_artists.append(sanitized)
+                continue
+
+            # 3. Structural band coordination check (e.g. 'Earth, Wind & Fire', 'Crosby, Stills, Nash & Young')
+            # Coordinated series where final segment has '&' or 'and', and preceding segments are single words/nouns
+            if any(conj in sub_segments[-1].lower() for conj in ['&', 'and']):
+                leading_are_single = all(len(s.split()) == 1 for s in sub_segments[:-1])
+                last_words = sub_segments[-1].replace('&', ' ').replace('and', ' ').split()
+                if leading_are_single and len(last_words) <= 2:
+                    sanitized = sanitize_artist_name(part.replace('__NUMCOMMA__', ','))
+                    if sanitized and sanitized.lower() not in seen:
+                        seen.add(sanitized.lower())
+                        all_artists.append(sanitized)
+                    continue
+
+            # 4. Otherwise, treat as multi-artist list
+            for s in sub_segments:
+                # Merge trailing generational suffix back to previous artist
+                if s.lower().rstrip('.') in GEN_SUFFIXES and all_artists:
+                    merged = f"{all_artists[-1]}, {s}"
+                    sanitized_merged = sanitize_artist_name(merged)
+                    if sanitized_merged:
+                        all_artists[-1] = sanitized_merged
+                        seen.add(sanitized_merged.lower())
+                    continue
+
+                sub = s
+                if sub.startswith("& "):
+                    sub = sub[2:].strip()
+                elif sub.lower().startswith("and "):
+                    sub = sub[4:].strip()
+
+                sanitized = sanitize_artist_name(sub.replace('__NUMCOMMA__', ','))
+                if sanitized and sanitized.lower() not in seen:
+                    seen.add(sanitized.lower())
+                    all_artists.append(sanitized)
+        else:
+            sanitized = sanitize_artist_name(part.replace('__NUMCOMMA__', ','))
             if sanitized and sanitized.lower() not in seen:
                 seen.add(sanitized.lower())
-                results.append(sanitized)
-        return results
+                all_artists.append(sanitized)
 
-    # Restore placeholders if no split happened
-    for ph, original in placeholders.items():
-        if ph in modified:
-            modified = modified.replace(ph, original)
-
-    sanitized = sanitize_artist_name(modified)
-    return [sanitized] if sanitized else []
+    return all_artists
 
 def is_valid_artist(raw_name: Optional[str]) -> bool:
     """Returns True if the name is a valid artist name."""

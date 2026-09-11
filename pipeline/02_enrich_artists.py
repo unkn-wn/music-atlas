@@ -54,6 +54,15 @@ NON_MUSICAL_AUDIO_TOKENS = {
     "birdsong", "hypnosis", "ocean", "general"
 }
 
+NON_MUSIC_GENRES = {
+    "sound", "white noise", "sleep", "rain", "meditation", "asmr",
+    "pink noise", "nature sounds", "sound effects", "guided meditation",
+    "birdsong", "hypnosis", "ocean", "general",
+    "comedy", "sports", "podcast", "spoken word", "audiobook", "news", "education",
+    "children's music", "nursery", "sing-along", "lullaby",
+    "musica infantil", "canciones infantiles", "kinderlieder", "barnmusik", "barnsagor"
+}
+
 def parse_subscribers(sub_str: str) -> int:
     """Parses subscriber strings like '264K', '50.2M', '980', '4.38 million' into exact integers."""
     if not sub_str:
@@ -101,7 +110,7 @@ def calculate_log_popularity(subs: int) -> int:
     return int(min(100, max(1, val)))
 
 def upgrade_avatar_url(raw_url: str) -> str:
-    """Transforms Google thumbnail URLs to 512px high-res square crops."""
+    """Transforms Google thumbnail URLs to 128px high-res square crops (optimized for WebGL texture memory)."""
     if not raw_url:
         return ""
     # Ensure protocol-relative URLs get an explicit https: prefix
@@ -109,7 +118,7 @@ def upgrade_avatar_url(raw_url: str) -> str:
         raw_url = "https:" + raw_url
     if "googleusercontent.com" in raw_url or "ggpht.com" in raw_url:
         base = raw_url.split("=")[0]
-        return f"{base}=s512-c-k-c0x00ffffff-no-rj"
+        return f"{base}=s128-c-k-c0x00ffffff-no-rj"
     return raw_url
 
 def load_metadata_cache() -> Dict[str, Dict]:
@@ -172,8 +181,14 @@ def query_youtube_channel(name: str, client: httpx.Client, max_retries: int = 2)
                     is_oac = "BADGE_STYLE_TYPE_VERIFIED_ARTIST" in badges
                     title_clean = title.lower().strip()
                     target_name = name.lower().strip()
-                    name_match = title_clean == target_name
-                    is_related_oac = is_oac and (target_name in title_clean or title_clean in target_name)
+                    title_norm = re.sub(r'[^a-z0-9]', '', title_clean)
+                    target_norm = re.sub(r'[^a-z0-9]', '', target_name)
+                    name_match = (title_clean == target_name) or (len(target_norm) >= 3 and title_norm == target_norm)
+                    is_related_oac = is_oac and (
+                        name_match or
+                        title_norm == f"{target_norm}vevo" or
+                        title_norm == f"{target_norm}official"
+                    )
 
                     if is_related_oac or name_match:
                         # YouTube swaps subscriberCountText / videoCountText for OAC channels:
@@ -219,7 +234,14 @@ def query_youtube_channel(name: str, client: httpx.Client, max_retries: int = 2)
                     oac_candidates = [c for c in candidates if c["is_oac"]]
                     if oac_candidates:
                         return max(oac_candidates, key=lambda c: c["subscribers"])
-                    return max(candidates, key=lambda c: c["subscribers"])
+                    # Strict OAC Guard for High-Subscriber Channels:
+                    # Genuine musical artists with > 500k subscribers have an Official Artist Channel (OAC) badge.
+                    # Non-OAC channels with millions of subscribers are corporate brands, gaming channels, or movie studios.
+                    best_candidate = max(candidates, key=lambda c: c["subscribers"])
+                    if best_candidate["subscribers"] <= 500_000:
+                        return best_candidate
+                    best_candidate["subscribers"] = 0
+                    return best_candidate
                 break
             elif resp.status_code == 429:
                 time.sleep(15.0 * (attempt + 1))
@@ -273,7 +295,11 @@ def query_itunes(name: str, client: httpx.Client, max_retries: int = 4) -> dict 
                 # Pass 2: Word-bounded collaboration match with valid audio preview
                 for r in results:
                     art_name = r.get("artistName", "").strip().lower()
-                    if re.search(rf'\b{re.escape(target_name)}\b', art_name) and r.get("previewUrl"):
+                    # Only match genuine collaboration strings (e.g. 'Artist A feat. Artist B', 'Artist A & Artist B')
+                    # or exact multi-word phrases. NEVER match when target_name is merely a single first name of a full name (e.g. 'Michael' matching 'Michael Jackson')
+                    is_collab = bool(re.search(rf'(?:ft\.?|feat\.?|&|,|\bx\b)\s+{re.escape(target_name)}\b', art_name, re.IGNORECASE))
+                    is_exact_phrase = len(target_name.split()) > 1 and bool(re.search(rf'\b{re.escape(target_name)}\b', art_name, re.IGNORECASE))
+                    if (is_collab or is_exact_phrase) and r.get("previewUrl"):
                         return {
                             "topTrack": r.get("trackName", ""),
                             "previewUrl": r.get("previewUrl", ""),
@@ -475,7 +501,7 @@ def hydrate_graph(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 3: Multi-Subgenre Resolution & Metadata Enrichment.")
-    parser.add_argument("--min-playlists", type=int, default=4, help="Minimum playlist threshold c_i for candidate survival (default: 4)")
+    parser.add_argument("--min-playlists", type=int, default=2, help="Minimum playlist threshold c_i for candidate survival (default: 2)")
     parser.add_argument("--catalog-only", action="store_true", help="Fast path: assemble artists_catalog.json using disk cache & local IDF subgenres")
     parser.add_argument("--hydrate-graph", action="store_true", help="Targeted hydration: resolve YouTube channels and iTunes audio previews strictly for connected nodes in atlas-graph.json")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; rely strictly on cache and local data")
@@ -670,18 +696,34 @@ def main():
             is_oac = cached_meta.get("is_oac", False)
             has_itunes_music = bool(cached_meta.get("preview_url") or cached_meta.get("topTrack") or is_valid_cached)
 
-            # Upstream Pruning Rule: Strictly prune unverified entities lacking authentic subscribers
-            # and non-artist channels lacking music catalogue verification.
-            # In --catalog-only mode (Fast Graph Path): Bypass pruning check so all qualifying candidates (c_i >= min_playlists)
-            # are emitted to artists_catalog.json and surviving_artist_ids.json.
-            if not args.catalog_only:
-                if subs <= 0:
+            # Strict Entity Culling:
+            # 1. Non-music genre check (reject Comedy, Sports, Podcast, Children's Music, etc.)
+            if primary_genre.lower().strip() in NON_MUSIC_GENRES:
+                continue
+
+            # 2. Strict OAC Guard for High-Subscriber Entities (> 500k)
+            # Any entity claiming > 500k subscribers MUST have an Official Artist Channel badge.
+            # Non-OAC channels with millions of subscribers are corporate brands, gaming channels, or movie studios.
+            if subs > 500_000 and not is_oac:
+                if not (cached_meta.get("preview_url") or cached_meta.get("topTrack")):
                     continue
-                if not is_oac and not has_itunes_music:
-                    continue
-            else:
-                if subs <= 0:
-                    subs = 1000
+                subs = 0
+
+            # 2.5 Mega-Artist Verification Gate:
+            # Genuine superstars (> 5M subscribers) always have verified iTunes tracks and previews under their artist name.
+            # Entities lacking any preview/track at this scale are channel handles (e.g. BANGTANTV) or unparsed titles.
+            if subs > 5_000_000 and not (cached_meta.get("preview_url") or cached_meta.get("topTrack")):
+                continue
+
+            # 3. Authentic Discography Gate
+            # If entity was resolved in metadata cache but has neither an OAC nor an iTunes track/preview:
+            # it is an unverified channel/uploader, NOT a music artist.
+            has_verified_music = is_oac or bool(cached_meta.get("preview_url") or cached_meta.get("topTrack"))
+            if cached_meta.get("resolved") and not has_verified_music:
+                continue
+
+            if subs <= 0:
+                subs = 1000
 
             top_track = cached_meta.get("topTrack") or cached_meta.get("top_track", "")
             preview_url = cached_meta.get("preview_url", "") or artist_harvested_preview.get(a_name, "")
@@ -696,6 +738,7 @@ def main():
                 "id": a_id,
                 "name": a_name,
                 "label": a_name,
+                "is_oac": is_oac,
                 "subscribers": subs,
                 "subscribersFormatted": subs_formatted,
                 "followers": subs,

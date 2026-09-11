@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react
 import Sigma from 'sigma';
 import Graph from 'graphology';
 import EdgeCurveProgram from '@sigma/edge-curve';
+import { createNodeImageProgram } from '@sigma/node-image';
 import { NodeCircleProgram, EdgeLineProgram } from 'sigma/rendering';
 
 export interface AtlasCanvasHandle {
@@ -18,57 +19,17 @@ interface AtlasCanvasProps {
   selectedContinentId: number | null;
 }
 
+const NodeImageProgram = createNodeImageProgram({
+  keepWithinCircle: true,
+  drawingMode: 'background',
+  objectFit: 'cover',
+  imageAttribute: 'image',
+  size: { mode: 'max', value: 128 },
+  maxTextureSize: 2048,
+  debounceTimeout: 150
+});
+
 const rgbaCache = new Map<string, string>();
-const imageCache = new Map<string, HTMLImageElement>();
-
-function getCachedImage(url: string, onLoaded?: () => void): HTMLImageElement | null {
-  if (!url) return null;
-  let img = imageCache.get(url);
-  if (!img) {
-    img = new Image();
-    img.onload = () => {
-      if (onLoaded) onLoaded();
-    };
-    img.onerror = () => {
-      // Failed image retains naturalWidth === 0
-    };
-    img.src = url;
-    imageCache.set(url, img);
-  }
-  return (img.complete && img.naturalWidth > 0) ? img : null;
-}
-
-function drawAvatarImage(
-  context: CanvasRenderingContext2D,
-  img: HTMLImageElement | null,
-  x: number,
-  y: number,
-  radius: number,
-  fallbackColor: string
-) {
-  context.save();
-  context.beginPath();
-  context.arc(x, y, radius, 0, Math.PI * 2);
-  context.closePath();
-  context.clip();
-
-  if (img) {
-    // 1:1 square crop (object-fit: cover) to prevent aspect ratio distortion
-    let sX = 0, sY = 0, sW = img.naturalWidth, sH = img.naturalHeight;
-    if (img.naturalWidth > img.naturalHeight) {
-      sW = img.naturalHeight;
-      sX = (img.naturalWidth - sW) / 2;
-    } else if (img.naturalHeight > img.naturalWidth) {
-      sH = img.naturalWidth;
-      sY = (img.naturalHeight - sH) / 2;
-    }
-    context.drawImage(img, sX, sY, sW, sH, x - radius, y - radius, radius * 2, radius * 2);
-  } else {
-    context.fillStyle = fallbackColor;
-    context.fill();
-  }
-  context.restore();
-}
 
 function hexToRgba(hex: string, alpha: number): string {
   const clampedAlpha = Math.max(0, Math.min(1, alpha));
@@ -102,7 +63,6 @@ function hexToRgba(hex: string, alpha: number): string {
   return result;
 }
 
-type ZoomTier = 'FAR' | 'MACRO' | 'MESO' | 'MICRO';
 
 interface LabelBox {
   minX: number;
@@ -174,8 +134,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sigmaRef = useRef<Sigma | null>(null);
-  const zoomTierRef = useRef<ZoomTier>('FAR');
   const collisionGridRef = useRef(new ScreenLabelCollisionGrid());
+  const renderedLabelCountRef = useRef(0);
 
   // Stale closure prevention: store latest onSelectNode in ref
   const onSelectNodeRef = useRef(onSelectNode);
@@ -192,9 +152,9 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       labelSize: 12,
       labelWeight: '700',
       labelColor: { color: '#ffffff' },
-      labelDensity: 0.65,
-      labelGridCellSize: 80,
-      labelRenderedSizeThreshold: 6,
+      labelDensity: 0.22,
+      labelGridCellSize: 110,
+      labelRenderedSizeThreshold: 8.5,
       minCameraRatio: 0.008,
       maxCameraRatio: 2.2,
       enableEdgeEvents: false,
@@ -205,7 +165,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       defaultEdgeType: 'curve',
       defaultNodeType: 'circle',
       nodeProgramClasses: {
-        circle: NodeCircleProgram
+        circle: NodeCircleProgram,
+        image: NodeImageProgram
       },
       edgeProgramClasses: {
         curve: EdgeCurveProgram,
@@ -216,43 +177,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const x = data.x;
         const y = data.y;
         const strokeColor = data.originalColor || data.color || '#38bdf8';
-        const tier = zoomTierRef.current;
-
-        // Hierarchical avatar rendering policy across zoom tiers:
-        // - At FAR: Only landmark superstars (>= 20M subscribers)
-        // - At MACRO: Headliners and prominent artists
-        // - At MESO: Prominent artists with size >= 5.0
-        // - At MICRO (close-up): Prominent artists or selected/neighbor nodes
-        const isMicro = tier === 'MICRO';
-        const isLandmark = Boolean(data.isHeadliner && ((data.subscribers as number) >= 20_000_000 || radius >= 11.0));
-        const isProminent = Boolean(data.isHeadliner || radius >= 5.5 || ((data.subscribers as number) >= 4_000_000));
-
-        const shouldRenderAvatar = Boolean(
-          data.image &&
-          !data.image.includes('d41d8cd98f00b204e9800998ecf8427e') &&
-          (data.isSelected ||
-           data.isNeighbor ||
-           (isMicro && (isProminent || radius >= 3.0)) ||
-           (tier === 'MESO' && isProminent) ||
-           (tier === 'MACRO' && data.isHeadliner) ||
-           (tier === 'FAR' && isLandmark))
-        );
-
-        if (shouldRenderAvatar) {
-          const img = getCachedImage(data.image, () => {
-            if (sigmaRef.current) {
-              sigmaRef.current.scheduleRender();
-            }
-          });
-          drawAvatarImage(context, img, x, y, radius, strokeColor);
-
-          // Inner border ring matching artist's genre color
-          context.beginPath();
-          context.arc(x, y, radius, 0, Math.PI * 2);
-          context.strokeStyle = strokeColor;
-          context.lineWidth = Math.max(1.5, radius * 0.12);
-          context.stroke();
-        }
 
         // Selected artist outer halo ring
         if (data.isSelected) {
@@ -273,6 +197,13 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
         // Artist name label text beneath node with strict Screen-Space Collision Detection
         if (data.label) {
+          // Label budget: Selected node and direct neighbors are ALWAYS rendered!
+          // For general background stars, cap at maximum 35 visible labels per frame
+          // to eliminate 2D canvas text layout stuttering during zoom and pan.
+          if (!data.isSelected && !data.isNeighbor && renderedLabelCountRef.current >= 35) {
+            return;
+          }
+
           const size = settings.labelSize || 12;
           const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
           const weight = settings.labelWeight || '700';
@@ -282,31 +213,21 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           const yOffset = y + radius + 8;
           const padX = 8;
           const padY = 4;
-          const hasSubtitle = Boolean(isMicro && (data.primaryGenre || data.macroGenre));
-          const extraH = hasSubtitle ? 14 : 0;
-
-          let effectiveWidth = textWidth;
-          if (hasSubtitle) {
-            const subText = data.primaryGenre || data.macroGenre;
-            context.font = `600 9.5px ${font}`;
-            const subWidth = context.measureText(subText).width;
-            if (subWidth > effectiveWidth) effectiveWidth = subWidth;
-            context.font = `${weight} ${size}px ${font}`;
-          }
 
           const labelBox: LabelBox = {
-            minX: x - effectiveWidth / 2 - padX,
-            maxX: x + effectiveWidth / 2 + padX,
+            minX: x - textWidth / 2 - padX,
+            maxX: x + textWidth / 2 + padX,
             minY: yOffset - padY,
-            maxY: yOffset + size + padY + extraH
+            maxY: yOffset + size + padY
           };
 
-          // Selected node always renders. Neighbors respect collision grid so two adjacent neighbors never draw over each other.
-          if (!data.isSelected && collisionGridRef.current.collides(labelBox)) {
-            return; // Cleanly suppress colliding label text
+          // Selected node and direct connections ALWAYS render their labels!
+          if (!data.isSelected && !data.isNeighbor && collisionGridRef.current.collides(labelBox)) {
+            return; // Cleanly suppress colliding background label text
           }
 
           collisionGridRef.current.insert(labelBox);
+          renderedLabelCountRef.current += 1;
 
           context.textAlign = 'center';
           context.textBaseline = 'top';
@@ -319,18 +240,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           // Text fill
           context.fillStyle = '#ffffff';
           context.fillText(data.label, x, yOffset);
-
-          // Rich varied genre identity at MICRO zoom
-          if (hasSubtitle) {
-            const subText = data.primaryGenre || data.macroGenre;
-            context.font = `600 9.5px ${font}`;
-            context.lineWidth = 2.5;
-            context.strokeStyle = 'rgba(7, 9, 14, 0.90)';
-            context.strokeText(subText, x, yOffset + size + 3);
-
-            context.fillStyle = strokeColor;
-            context.fillText(subText, x, yOffset + size + 3);
-          }
         }
       },
       defaultDrawNodeHover: (context: CanvasRenderingContext2D, data: any, settings: any) => {
@@ -372,7 +281,18 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
     sigma.on('beforeRender', () => {
       collisionGridRef.current.clear();
+      renderedLabelCountRef.current = 0;
     });
+
+    // Wire up NodeImageProgram texture manager event so newly downloaded avatar images
+    // immediately re-index and display without requiring camera movement or user interaction
+    const onNewTexture = () => {
+      sigma.refresh();
+    };
+    const tm = (NodeImageProgram as any).textureManager;
+    if (tm && typeof tm.on === 'function') {
+      tm.on('newTexture', onNewTexture);
+    }
 
     const camera = sigma.getCamera();
     camera.setState({ x: 0.5, y: 0.5, ratio: 1.0 });
@@ -380,21 +300,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const hoverNodes = containerRef.current.querySelector('.sigma-hoverNodes');
     const labels = containerRef.current.querySelector('.sigma-labels');
     if (labels && hoverNodes) labels.before(hoverNodes);
-
-    // Discrete Camera Zoom LOD calibrated for expanded cosmos
-    camera.on('updated', () => {
-      const ratio = camera.getState().ratio;
-      let nextTier: ZoomTier = 'FAR';
-      if (ratio < 0.15) nextTier = 'MICRO';
-      else if (ratio < 0.45) nextTier = 'MESO';
-      else if (ratio < 1.0) nextTier = 'MACRO';
-      else nextTier = 'FAR';
-
-      if (nextTier !== zoomTierRef.current) {
-        zoomTierRef.current = nextTier;
-        sigma.refresh();
-      }
-    });
 
     sigmaRef.current = sigma;
 
@@ -416,6 +321,9 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     });
 
     return () => {
+      if (tm && typeof tm.off === 'function') {
+        tm.off('newTexture', onNewTexture);
+      }
       sigmaRef.current = null;
       sigma.kill();
     };
@@ -502,7 +410,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     }
   }));
 
-  // Build fast edge lookup map with pre-calculated tier colors (zero-allocation per frame)
+  // Build fast edge lookup map with constant styling (zero-allocation per frame, zero zoom thresholds)
   const edgeLookupRef = useRef<Map<string, {
     src: string;
     dst: string;
@@ -511,7 +419,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     size: number;
     weight: number;
     isBridge: boolean;
-    colorByTier: Record<ZoomTier, string>;
+    color: string;
   }>>(new Map());
 
   useEffect(() => {
@@ -524,7 +432,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       size: number;
       weight: number;
       isBridge: boolean;
-      colorByTier: Record<ZoomTier, string>;
+      color: string;
     }>();
 
     graph.forEachEdge((edge, attrs, source, target) => {
@@ -539,12 +447,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         size: (attrs.size as number) || 1,
         weight,
         isBridge: Boolean(attrs.isBridge),
-        colorByTier: {
-          FAR: hexToRgba(srcColor, 0.05),
-          MACRO: hexToRgba(srcColor, 0.08),
-          MESO: hexToRgba(srcColor, 0.12),
-          MICRO: hexToRgba(srcColor, 0.15)
-        }
+        color: hexToRgba(srcColor, 0.12)
       });
     });
     edgeLookupRef.current = map;
@@ -557,7 +460,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const sigma = sigmaRef.current;
     const edgeMap = edgeLookupRef.current;
 
-    // Resolve all adaptive neighbor IDs (full 6 to 20 connections) without .slice(0, 10)
+    // Resolve all adaptive neighbor IDs (from topCrossovers AND graph edges)
     const neighborIds = new Set<string>();
     let selectedArtistColor = '#38bdf8';
     if (selectedNodeId && graph.hasNode(selectedNodeId)) {
@@ -567,14 +470,16 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       crossovers.forEach((c) => {
         neighborIds.add(c.neighborId);
       });
+      graph.forEachNeighbor(selectedNodeId, (nbr) => {
+        neighborIds.add(nbr);
+      });
     }
 
-    // Dynamic Edge Reducer
+    // Dynamic Edge Reducer (constant, zero zoom thresholds)
     sigma.setSetting('edgeReducer', (edge, data) => {
       const cached = edgeMap.get(edge);
       const src = cached ? cached.src : graph.source(edge);
       const dst = cached ? cached.dst : graph.target(edge);
-      const tier = zoomTierRef.current;
 
       // 1. When an artist is selected: illuminate filaments connecting to the adaptive connections
       if (selectedNodeId) {
@@ -607,35 +512,34 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         }
       }
 
-      // 3. Always-visible translucent filaments with pre-computed tier colors
-      const edgeColor = cached ? cached.colorByTier[tier] : 'rgba(148, 163, 184, 0.08)';
-      const sizeFactor = tier === 'FAR' ? 0.08 : tier === 'MACRO' ? 0.12 : tier === 'MESO' ? 0.14 : 0.16;
+      // 3. Always-visible translucent filaments with constant styling (no zoom thresholds)
+      const edgeColor = cached ? cached.color : 'rgba(148, 163, 184, 0.10)';
 
       return {
         ...data,
         hidden: false,
         color: edgeColor,
-        size: Math.max(0.10, (cached ? cached.size : 1) * sizeFactor)
+        size: Math.max(0.12, (cached ? cached.size : 1) * 0.12)
       };
     });
 
-    // Dynamic Node Reducer
+    // Dynamic Node Reducer (constant, zero zoom thresholds)
     sigma.setSetting('nodeReducer', (node, data) => {
       const continentId = data.continentId as number;
       const originalColor = data.originalColor || data.color;
       const originalLabel = (data.originalLabel || data.label || '') as string;
       const size = (data.originalSize as number) || (data.size as number) || 1.1;
-      const tier = zoomTierRef.current;
 
       // Inverted z-index: smaller artists get higher z-index so they remain hoverable/clickable over larger artists
       const invertedZ = Math.max(1, Math.round(100 - (size || 1.1)));
+      const hasImage = Boolean(data.image && !data.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
 
-      // 1. When an artist is selected: focal artist and adaptive relationship peers
+      // 1. When an artist is selected: focal artist and ALL connected peers ALWAYS display image and label
       if (selectedNodeId) {
         if (node === selectedNodeId) {
           return {
             ...data,
-            type: 'circle',
+            type: hasImage ? 'image' : 'circle',
             size,
             color: originalColor,
             forceLabel: true,
@@ -649,8 +553,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         if (neighborIds.has(node)) {
           return {
             ...data,
-            type: 'circle',
-            size, // Keeps authentic size, does not grow artificially
+            type: hasImage ? 'image' : 'circle',
+            size,
             color: originalColor,
             forceLabel: true,
             label: originalLabel,
@@ -689,9 +593,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         };
       }
 
+      // Only prominent artists render image textures in global view (constant, zero zoom thresholds)
+      const isProminent = Boolean(data.isHeadliner || size >= 3.2);
+
       return {
         ...data,
-        type: 'circle',
+        type: hasImage && isProminent ? 'image' : 'circle',
         size,
         color: originalColor,
         isSelected: false,

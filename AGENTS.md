@@ -31,7 +31,7 @@ The entire universe is built on **one cardinal rule**:
 - **NEVER** create artificial override lists, whitelist conditions, or special-case hacks for specific artists or genres.
 - **NEVER** hardcode the genre names or normalize genre categories. Genres should explicitly come from the apple itunes api's primaryGenre, which would be the continent label. Secondary genres will come from everysoundatonce subgenre when an artist is scraped.
 - If an artist is missing, the solution is **always** broader, higher-volume playlist harvesting, never hardcoded injection.
-- Artists survive into the atlas if and only if they satisfy the mathematical survival criterion: appearing across $c_i \ge 2$ independent qualifying user playlists.
+- Artists survive into the atlas if and only if they satisfy the mathematical survival criterion: appearing across $c_i \ge 4$ independent qualifying user playlists.
 
 ### C. Equal Analysis Across ALL Subgenres (Zero Favoritism)
 
@@ -57,7 +57,7 @@ The pipeline consists of clean, decoupled stages in `pipeline/`:
 
 1. `00_harvest_genres.py`: Ingests popularity-ranked genre taxonomy from EveryNoise (names and ranks only; zero Spotify embeds).
 2. `01_harvest_playlists.py`: Harvests 20+ user-created community playlists per subgenre via YouTube Music public searches. Applies strict Unicode sanitization, anti-discography filters, and curator caps.
-3. `02_enrich_artists.py`: Filters artists by $c_i \ge 2$, computes IDF-weighted Top 3 Subgenres, resolves authentic subscriber counts via YouTube Official Artist Channels, and attaches genuine audio previews.
+3. `02_enrich_artists.py`: Filters artists by $c_i \ge 4$, computes IDF-weighted Top 3 Subgenres, resolves authentic subscriber counts via YouTube Official Artist Channels, and attaches genuine audio previews.
 4. `03_build_cooccurrence.py`: Builds the sparse co-occurrence matrix from shared playlist co-presence.
 5. `04_normalize_and_sparsify.py`: Calculates cosine similarity, Jaccard coefficients, and k-NN sparsification.
 6. `05_community_and_layout.py`: Dynamic continental partitioning, gentle genre macro-initialization, strong-gravity ForceAtlas2 simulation, radial knee compression, and disk clearance.

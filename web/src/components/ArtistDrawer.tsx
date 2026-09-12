@@ -50,17 +50,37 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
   const hasPreview = Boolean(artist.previewUrl);
 
+  const sidebarImageUrl = useMemo(() => {
+    if (!artist.image) return '';
+    let url = artist.image.trim();
+    if (url.startsWith('//')) {
+      url = 'https:' + url;
+    }
+    // Upgrade Google CDN image to crisp 512x512 portrait
+    if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
+      const base = url.split('=')[0];
+      return `${base}=s512-c-k-c0x00ffffff-no-rj`;
+    }
+    // Upgrade iTunes artwork to 600x600
+    if (url.includes('mzstatic.com')) {
+      return url.replace(/\d+x\d+bb/, '600x600bb');
+    }
+    return url;
+  }, [artist.image]);
+
   return (
     <div className="glass-panel w-80 sm:w-96 shadow-2xl flex flex-col h-[calc(100vh-6rem)] overflow-hidden pointer-events-auto border-l border-white/15 animate-in slide-in-from-right duration-300">
       {/* Header Image & Close Button */}
       <div className="relative h-56 w-full shrink-0 overflow-hidden bg-slate-950">
         {/* Ambient blurred backdrop */}
-        {artist.image && (
+        {sidebarImageUrl && (
           <img
             key={`${artist.id}-backdrop`}
-            src={artist.image}
+            src={sidebarImageUrl}
             alt=""
             aria-hidden="true"
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             className="absolute inset-0 w-full h-full object-cover blur-xl scale-125 opacity-35 pointer-events-none"
             onError={(e) => {
               (e.target as HTMLElement).style.display = 'none';
@@ -70,11 +90,18 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         {/* Main artist photo positioned at object-top for natural portrait framing */}
         <img
           key={`${artist.id}-main`}
-          src={artist.image || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
+          src={sidebarImageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
           alt={artist.label}
+          referrerPolicy="no-referrer"
+          crossOrigin="anonymous"
           className="w-full h-full object-cover object-top"
           onError={(e) => {
-            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80';
+            const target = e.target as HTMLImageElement;
+            if (artist.image && target.src !== artist.image) {
+              target.src = artist.image;
+            } else {
+              target.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80';
+            }
           }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />

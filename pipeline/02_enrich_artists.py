@@ -24,11 +24,12 @@ import argparse
 import threading
 import subprocess
 from urllib.parse import quote_plus
-from collections import Counter
-from typing import Dict, List, Optional, Tuple
+from collections import Counter, defaultdict
+from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor
 import httpx
 from tqdm import tqdm
+from ytmusicapi import YTMusic
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -136,117 +137,84 @@ def save_metadata_cache(cache: Dict[str, Dict]):
         json.dump(cache, f, indent=2, ensure_ascii=False)
     os.replace(temp, CACHE_FILE)
 
-def query_youtube_channel(name: str, client: httpx.Client, max_retries: int = 2) -> Optional[Dict]:
+_thread_local = threading.local()
+
+def get_ytmusic() -> YTMusic:
+    if not hasattr(_thread_local, "yt"):
+        _thread_local.yt = YTMusic()
+    return _thread_local.yt
+
+def resolve_channel_by_id(channel_id: str, yt: Optional[YTMusic] = None) -> Optional[Dict]:
+    """Resolves official YouTube Music channel entity metadata directly by canonical channel ID."""
+    if not channel_id or not channel_id.startswith("UC"):
+        return None
+    try:
+        if yt is None:
+            yt = get_ytmusic()
+        body = {"browseId": channel_id}
+        resp = yt._send_request("browse", body)
+        header = resp.get("header", {})
+        r_header = header.get("musicImmersiveHeaderRenderer") or header.get("musicVisualHeaderRenderer")
+        if not r_header:
+            return None
+
+        # Canonical artist title
+        title_runs = r_header.get("title", {}).get("runs", [])
+        title = title_runs[0].get("text", "") if title_runs else ""
+
+        # Authentic subscriber count
+        sub_btn = r_header.get("subscriptionButton", {}).get("subscribeButtonRenderer", {})
+        sub_runs = sub_btn.get("subscriberCountText", {}).get("runs", [])
+        sub_text = sub_runs[0].get("text", "") if sub_runs else ""
+        subs = parse_subscribers(sub_text)
+
+        # Avatar thumbnail
+        fg_thumbs = r_header.get("foregroundThumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+        bg_thumbs = r_header.get("thumbnail", {}).get("musicThumbnailRenderer", {}).get("thumbnail", {}).get("thumbnails", [])
+        thumbs = fg_thumbs or bg_thumbs
+        raw_avatar = thumbs[-1].get("url", "") if thumbs else ""
+        avatar_url = upgrade_avatar_url(raw_avatar)
+
+        is_oac = "musicImmersiveHeaderRenderer" in header
+
+        return {
+            "name": title,
+            "subscribers": subs,
+            "image": avatar_url,
+            "channelId": channel_id,
+            "is_oac": is_oac
+        }
+    except Exception:
+        return None
+
+def resolve_artist_youtube(name: str, channel_id: Optional[str] = None, yt: Optional[YTMusic] = None) -> Optional[Dict]:
     """
-    YouTube public channel search resolver.
-    Matches Official Artist Channel (BADGE_STYLE_TYPE_VERIFIED_ARTIST) or exact channel title.
-    Extracts authentic subscriber count and high-res Google portrait (upgraded to 512px).
+    Resolves authentic YouTube Music artist metadata.
+    Prioritizes direct channel ID resolution. Falls back to YouTube Music artist search.
     """
-    url = f"https://www.youtube.com/results?search_query={quote_plus(name)}&sp=EgIQAg%253D%253D"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-    }
-    for attempt in range(max_retries):
-        try:
-            resp = client.get(url, headers=headers, timeout=6.0)
-            if resp.status_code == 200:
-                m = re.search(r'var ytInitialData = ({.*?});</script>', resp.text)
-                if not m:
-                    break
-                try:
-                    data = json.loads(m.group(1))
-                except Exception:
-                    break
+    if yt is None:
+        yt = get_ytmusic()
 
-                def find_channel_renderers(obj):
-                    channels = []
-                    if isinstance(obj, dict):
-                        if "channelRenderer" in obj:
-                            channels.append(obj["channelRenderer"])
-                        for v in obj.values():
-                            channels.extend(find_channel_renderers(v))
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            channels.extend(find_channel_renderers(item))
-                    return channels
+    # 1. Primary path: direct channel ID resolution
+    if channel_id and channel_id.startswith("UC"):
+        res = resolve_channel_by_id(channel_id, yt)
+        if res:
+            return res
 
-                renderers = find_channel_renderers(data)
-                candidates = []
-                for c in renderers:
-                    title = c.get("title", {}).get("simpleText", "")
-                    if not title and c.get("title", {}).get("runs"):
-                        title = "".join(r.get("text", "") for r in c["title"]["runs"])
-                    badges = [b.get("metadataBadgeRenderer", {}).get("style") for b in c.get("ownerBadges", [])]
-                    is_oac = "BADGE_STYLE_TYPE_VERIFIED_ARTIST" in badges
-                    title_clean = title.lower().strip()
-                    target_name = name.lower().strip()
-                    title_norm = re.sub(r'[^a-z0-9]', '', title_clean)
-                    target_norm = re.sub(r'[^a-z0-9]', '', target_name)
-                    name_match = (title_clean == target_name) or (len(target_norm) >= 3 and title_norm == target_norm)
-                    is_related_oac = is_oac and (
-                        name_match or
-                        title_norm == f"{target_norm}vevo" or
-                        title_norm == f"{target_norm}official"
-                    )
+    # 2. Fallback path: YouTube Music verified artist search
+    try:
+        clean_name = name.lower().strip()
+        results = yt.search(name, filter="artists", limit=3)
+        for item in results or []:
+            bid = item.get("browseId", "")
+            artist_name = (item.get("artist") or "").lower().strip()
+            if bid.startswith("UC") and (artist_name == clean_name or not clean_name):
+                c_res = resolve_channel_by_id(bid, yt)
+                if c_res:
+                    return c_res
+    except Exception:
+        pass
 
-                    if is_related_oac or name_match:
-                        # YouTube swaps subscriberCountText / videoCountText for OAC channels:
-                        # subscriberCountText may contain the @handle, while videoCountText
-                        # holds the real subscriber count. Read both and pick the right one.
-                        sub_text = ""
-                        for field in ["subscriberCountText", "videoCountText"]:
-                            f_obj = c.get(field, {})
-                            st = f_obj.get("simpleText") or ""
-                            if not st and f_obj.get("runs"):
-                                st = "".join(r.get("text", "") for r in f_obj.get("runs", []))
-                            if not st:
-                                st = f_obj.get("accessibility", {}).get("accessibilityData", {}).get("label", "")
-                            if not st:
-                                continue
-                            st_lower = st.lower()
-                            # Skip @handles (e.g. "@TaylorSwift")
-                            if st.startswith("@"):
-                                continue
-                            # Skip actual video/view counts
-                            if "video" in st_lower or "view" in st_lower or "track" in st_lower:
-                                continue
-                            # Accept if it looks like a subscriber string
-                            if "sub" in st_lower or "abonn" in st_lower or "suscriptor" in st_lower or re.search(r'\d', st):
-                                sub_text = st
-                                break
-
-                        subs = parse_subscribers(sub_text)
-                        thumbs = c.get("thumbnail", {}).get("thumbnails", [])
-                        raw_avatar = thumbs[-1].get("url", "") if thumbs else ""
-                        avatar_url = upgrade_avatar_url(raw_avatar)
-
-                        candidates.append({
-                            "subscribers": subs,
-                            "image": avatar_url,
-                            "channelTitle": title,
-                            "channelId": c.get("channelId", ""),
-                            "is_oac": is_oac
-                        })
-
-                # Return best candidate: prefer OAC channels, then highest subscriber count
-                if candidates:
-                    oac_candidates = [c for c in candidates if c["is_oac"]]
-                    if oac_candidates:
-                        return max(oac_candidates, key=lambda c: c["subscribers"])
-                    # Strict OAC Guard for High-Subscriber Channels:
-                    # Genuine musical artists with > 500k subscribers have an Official Artist Channel (OAC) badge.
-                    # Non-OAC channels with millions of subscribers are corporate brands, gaming channels, or movie studios.
-                    best_candidate = max(candidates, key=lambda c: c["subscribers"])
-                    if best_candidate["subscribers"] <= 500_000:
-                        return best_candidate
-                    best_candidate["subscribers"] = 0
-                    return best_candidate
-                break
-            elif resp.status_code == 429:
-                time.sleep(15.0 * (attempt + 1))
-        except Exception:
-            time.sleep(0.3)
     return None
 
 class iTunesRateLimiter:
@@ -350,17 +318,27 @@ def hydrate_graph(args):
     print(f"Loaded {len(cache)} existing cached artist metadata entries.")
 
     artist_harvested_preview = {}
+    artist_primary_channel = {}
     if os.path.exists(PLAYLISTS_FILE):
         try:
             with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
                 playlists = json.load(f)
+            channel_counts = defaultdict(Counter)
             for pl in playlists:
                 for t in pl.get("tracks", []):
                     c_name = sanitize_artist_name(t.get("artist_name", "").strip())
-                    if c_name and t.get("preview_url") and c_name not in artist_harvested_preview:
+                    if not c_name:
+                        continue
+                    if t.get("preview_url") and c_name not in artist_harvested_preview:
                         artist_harvested_preview[c_name] = t["preview_url"]
-        except Exception:
-            pass
+                    cid = t.get("channel_id", "").strip()
+                    if cid and cid.startswith("UC"):
+                        channel_counts[c_name][cid] += 1
+            for c_name, counts in channel_counts.items():
+                artist_primary_channel[c_name] = counts.most_common(1)[0][0]
+            print(f"Mapped {len(artist_primary_channel)} artists to authentic YouTube Channel IDs from playlists.")
+        except Exception as e:
+            print(f"Warning mapping playlist channel IDs: {e}")
 
     nodes = graph_data.get("nodes", [])
     print(f"Total nodes in connected graph: {len(nodes)}")
@@ -376,11 +354,14 @@ def hydrate_graph(args):
         if "d41d8cd98f00b204e9800998ecf8427e" in avatar:
             avatar = ""
 
+        target_cid = artist_primary_channel.get(node_name) or artist_primary_channel.get(node_name.lower()) or ""
+        cached_cid = c_meta.get("channelId", "")
+
         needs_yt = (subs <= 1000 or not avatar) and not c_meta.get("yt_checked", False)
-        # Allow re-fetch for clearly wrong data: subscriber counts ≤ 100 are almost always
-        # the result of matching a fan channel instead of the official one
+        # Re-resolve if artist has an authentic channel ID from playlists that was never stored or subs <= 100
+        if target_cid and (not cached_cid or cached_cid != target_cid or subs <= 100):
+            needs_yt = True
         needs_yt = needs_yt or (subs <= 100 and subs > 0)
-        # Also re-fetch if image is missing protocol (old broken data)
         if avatar and not avatar.startswith("http"):
             needs_yt = True
         needs_itunes = not preview and not c_meta.get("itunes_checked", False)
@@ -407,23 +388,30 @@ def hydrate_graph(args):
             preview_url = c_meta.get("preview_url", "") or artist_harvested_preview.get(name, "")
             top_track = c_meta.get("topTrack") or c_meta.get("top_track", "")
             itunes_genre = c_meta.get("primaryGenre", "")
+            target_cid = artist_primary_channel.get(name) or artist_primary_channel.get(name.lower()) or ""
+            cached_cid = c_meta.get("channelId", "")
 
-            # 1. YouTube Channel Lookup if missing authentic subscribers or avatar
+            # 1. YouTube Channel Lookup via authentic Channel ID
             needs_refetch = (subs <= 1000 or not avatar_url) and not c_meta.get("yt_checked", False)
+            if target_cid and (not cached_cid or cached_cid != target_cid or subs <= 100):
+                needs_refetch = True
             needs_refetch = needs_refetch or (subs <= 100 and subs > 0)
             if avatar_url and not avatar_url.startswith("http"):
                 needs_refetch = True
+
             if needs_refetch:
-                yt_res = query_youtube_channel(name, http_client)
+                yt_res = resolve_artist_youtube(name, target_cid, get_ytmusic())
                 if yt_res:
-                    if yt_res.get("subscribers") and (subs <= 1000 or yt_res["subscribers"] > subs):
+                    if yt_res.get("subscribers") and (subs <= 1000 or yt_res["subscribers"] > subs or target_cid):
                         subs = yt_res["subscribers"]
-                    if not avatar_url and yt_res.get("image"):
+                    if yt_res.get("image"):
                         avatar_url = yt_res["image"]
                     if yt_res.get("is_oac"):
                         is_oac = True
+                    if yt_res.get("channelId"):
+                        c_meta["channelId"] = yt_res["channelId"]
                 c_meta["yt_checked"] = True
-                time.sleep(random.uniform(0.15, 0.35))
+                time.sleep(random.uniform(0.1, 0.25))
 
             # 2. Apple iTunes Lookup for top track, verified 30s preview, artwork, genre
             if (not preview_url or not top_track) and not c_meta.get("itunes_checked", False):
@@ -533,6 +521,8 @@ def main():
     artist_playlist_counts = Counter()
     artist_canonical_id = {}
     artist_harvested_preview = {}
+    artist_primary_channel = {}
+    channel_counts = defaultdict(Counter)
 
     for pl in playlists:
         seen_in_pl = set()
@@ -548,6 +538,13 @@ def main():
                 artist_canonical_id[clean_name] = t["artist_id"]
             if t.get("preview_url") and clean_name not in artist_harvested_preview:
                 artist_harvested_preview[clean_name] = t["preview_url"]
+            cid = t.get("channel_id", "").strip()
+            if cid and cid.startswith("UC"):
+                channel_counts[clean_name][cid] += 1
+
+    for c_name, counts in channel_counts.items():
+        artist_primary_channel[c_name] = counts.most_common(1)[0][0]
+    print(f"Mapped {len(artist_primary_channel)} artists to authentic YouTube Channel IDs from playlists.")
 
     # 2. Artist Survival Rule: c_i >= args.min_playlists (must appear in at least min_playlists qualifying community playlists)
     cache = load_metadata_cache()
@@ -626,18 +623,21 @@ def main():
                 preview_url = c_meta.get("preview_url", "") or artist_harvested_preview.get(name, "")
                 top_track = c_meta.get("topTrack") or c_meta.get("top_track", "")
                 itunes_genre = c_meta.get("primaryGenre", "")
+                target_cid = artist_primary_channel.get(name) or artist_primary_channel.get(name.lower()) or ""
 
-                # 1. YouTube Channel Lookup if missing authentic subscribers or avatar
-                if subs <= 0 or not avatar_url:
-                    yt_res = query_youtube_channel(name, http_client)
+                # 1. YouTube Channel Lookup via authentic Channel ID
+                if subs <= 0 or not avatar_url or (target_cid and not c_meta.get("channelId")):
+                    yt_res = resolve_artist_youtube(name, target_cid, get_ytmusic())
                     if yt_res:
-                        if subs <= 0 and yt_res.get("subscribers"):
+                        if yt_res.get("subscribers") and (subs <= 0 or yt_res["subscribers"] > subs or target_cid):
                             subs = yt_res["subscribers"]
-                        if not avatar_url and yt_res.get("image"):
+                        if yt_res.get("image"):
                             avatar_url = yt_res["image"]
                         if yt_res.get("is_oac"):
                             is_oac = True
-                    time.sleep(random.uniform(0.15, 0.35))
+                        if yt_res.get("channelId"):
+                            c_meta["channelId"] = yt_res["channelId"]
+                    time.sleep(random.uniform(0.1, 0.25))
 
                 # 2. Apple iTunes Lookup for top track, verified 30s AAC preview, artwork, and primary genre
                 if not itunes_genre or not preview_url or not top_track or not avatar_url:
@@ -665,6 +665,7 @@ def main():
                     "preview_url": preview_url,
                     "topTrack": top_track,
                     "image": avatar_url,
+                    "channelId": c_meta.get("channelId", target_cid),
                     "resolved": True
                 }
 

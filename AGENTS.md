@@ -65,4 +65,4 @@ The pipeline consists of clean, decoupled stages in `pipeline/`:
 
 Master Runner:
 
-- `run_pipeline.py` at repository root coordinates the entire execution from start to finish.
+- `run_pipeline.py` at /pipeline/ coordinates the entire execution from start to finish.

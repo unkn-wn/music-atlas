@@ -128,6 +128,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             key={currentArtist.id}
             src={currentArtist.image}
             alt={currentArtist.label}
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             className="w-full h-full object-cover"
             onError={(e) => {
               (e.target as HTMLElement).style.display = 'none';

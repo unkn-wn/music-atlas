@@ -245,7 +245,7 @@ def main():
     parser.add_argument("--playlists-per-genre", type=int, default=20, help="Candidate playlists to check per genre (default: 20)")
     parser.add_argument("--max-accepted-per-genre", type=int, default=10, help="Max qualifying playlists to accept per genre (default: 10)")
     parser.add_argument("--rate-limit", type=float, default=2.5, help="Max requests per second for YTM (default: 2.5)")
-    parser.add_argument("--use-cache", action="store_true", default=True, help="Incorporate pre-existing crawled playlist cache")
+    parser.add_argument("--use-cache", action="store_true", default=False, help="Incorporate pre-existing crawled playlist cache")
     parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
     args = parser.parse_args()
 

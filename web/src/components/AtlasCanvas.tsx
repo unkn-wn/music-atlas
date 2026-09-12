@@ -481,49 +481,44 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       const src = cached ? cached.src : graph.source(edge);
       const dst = cached ? cached.dst : graph.target(edge);
 
-      // 1. When an artist is selected: illuminate filaments connecting to the adaptive connections
+      // 1. When an artist is selected: illuminate only incident edges, hide all background edges to eliminate lag and white glare
       if (selectedNodeId) {
-        const isIncidentToSelected = (src === selectedNodeId && neighborIds.has(dst)) || (dst === selectedNodeId && neighborIds.has(src));
+        const isIncidentToSelected = src === selectedNodeId || dst === selectedNodeId;
 
         if (isIncidentToSelected) {
           const isCrossContinent = Boolean(cached && cached.srcCont !== cached.dstCont);
           const isBridge = cached ? cached.isBridge : Boolean(data.isBridge);
           const isDistantCrossover = isBridge || isCrossContinent;
 
-          return {
-            ...data,
-            hidden: false,
-            color: isDistantCrossover ? hexToRgba(selectedArtistColor, 0.35) : selectedArtistColor,
-            size: isDistantCrossover ? 0.35 : Math.max(0.6, (cached ? cached.size : 1) * 0.85),
-            zIndex: isDistantCrossover ? 6 : 10
-          };
-        } else {
-          return {
-            ...data,
-            hidden: true
-          };
+          data.hidden = false;
+          data.color = isDistantCrossover ? hexToRgba(selectedArtistColor, 0.5) : selectedArtistColor;
+          data.size = isDistantCrossover ? 0.5 : Math.max(0.7, (cached ? cached.size : 1) * 0.9);
+          data.zIndex = isDistantCrossover ? 6 : 10;
+          return data;
         }
+
+        data.hidden = true;
+        return data;
       }
 
       // 2. Filter by Continent if one is selected
       if (selectedContinentId !== null && cached) {
         if (cached.srcCont !== selectedContinentId && cached.dstCont !== selectedContinentId) {
-          return { ...data, hidden: true };
+          data.hidden = true;
+          return data;
         }
       }
 
       // 3. Always-visible translucent filaments with constant styling (no zoom thresholds)
       const edgeColor = cached ? cached.color : 'rgba(148, 163, 184, 0.10)';
 
-      return {
-        ...data,
-        hidden: false,
-        color: edgeColor,
-        size: Math.max(0.12, (cached ? cached.size : 1) * 0.12)
-      };
+      data.hidden = false;
+      data.color = edgeColor;
+      data.size = Math.max(0.12, (cached ? cached.size : 1) * 0.12);
+      return data;
     });
 
-    // Dynamic Node Reducer (constant, zero zoom thresholds)
+    // Dynamic Node Reducer (constant, zero zoom thresholds, zero buffer thrashing)
     sigma.setSetting('nodeReducer', (node, data) => {
       const continentId = data.continentId as number;
       const originalColor = data.originalColor || data.color;
@@ -533,78 +528,74 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       // Inverted z-index: smaller artists get higher z-index so they remain hoverable/clickable over larger artists
       const invertedZ = Math.max(1, Math.round(100 - (size || 1.1)));
       const hasImage = Boolean(data.image && !data.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
+      const isProminent = Boolean(data.isHeadliner || size >= 3.2);
+      const naturalType = hasImage && isProminent ? 'image' : 'circle';
 
-      // 1. When an artist is selected: focal artist and ALL connected peers ALWAYS display image and label
+      // 1. When an artist is selected: focal artist and connected peers display image and label
       if (selectedNodeId) {
         if (node === selectedNodeId) {
-          return {
-            ...data,
-            type: hasImage ? 'image' : 'circle',
-            size,
-            color: originalColor,
-            forceLabel: true,
-            label: originalLabel,
-            isSelected: true,
-            isNeighbor: false,
-            zIndex: 200
-          };
+          data.type = naturalType;
+          data.image = hasImage ? data.image : null;
+          data.size = Math.max(size, 2.8);
+          data.color = originalColor;
+          data.forceLabel = true;
+          data.label = originalLabel;
+          data.isSelected = true;
+          data.isNeighbor = false;
+          data.zIndex = 200;
+          return data;
         }
 
         if (neighborIds.has(node)) {
-          return {
-            ...data,
-            type: hasImage ? 'image' : 'circle',
-            size,
-            color: originalColor,
-            forceLabel: true,
-            label: originalLabel,
-            isSelected: false,
-            isNeighbor: true,
-            zIndex: 100 + invertedZ
-          };
+          data.type = naturalType;
+          data.image = hasImage ? data.image : null;
+          data.size = size;
+          data.color = originalColor;
+          data.forceLabel = true;
+          data.label = originalLabel;
+          data.isSelected = false;
+          data.isNeighbor = true;
+          data.zIndex = 100 + invertedZ;
+          return data;
         }
 
-        // Dim unrelated nodes
-        return {
-          ...data,
-          type: 'circle',
-          size: Math.max(0.8, size * 0.6),
-          color: hexToRgba('#324155', 0.12),
-          label: null,
-          forceLabel: false,
-          isSelected: false,
-          isNeighbor: false,
-          zIndex: 0
-        };
+        // Unselected background nodes: retain naturalType (ZERO buffer reallocation)
+        // Set image to null so avatar textures are NOT rendered, cleanly falling back to dimmed circle color
+        data.type = naturalType;
+        data.image = null;
+        data.size = Math.max(0.6, size * 0.7);
+        data.color = hexToRgba(originalColor, 0.20);
+        data.label = null;
+        data.forceLabel = false;
+        data.isSelected = false;
+        data.isNeighbor = false;
+        data.zIndex = 0;
+        return data;
       }
 
       // 2. Continent Filtering (Global View)
       if (selectedContinentId !== null && continentId !== selectedContinentId) {
-        return {
-          ...data,
-          type: 'circle',
-          size: Math.max(0.8, size * 0.5),
-          color: hexToRgba('#324155', 0.08),
-          label: null,
-          forceLabel: false,
-          isSelected: false,
-          isNeighbor: false,
-          zIndex: 0
-        };
+        data.type = naturalType;
+        data.image = null;
+        data.size = Math.max(0.6, size * 0.5);
+        data.color = hexToRgba('#324155', 0.08);
+        data.label = null;
+        data.forceLabel = false;
+        data.isSelected = false;
+        data.isNeighbor = false;
+        data.zIndex = 0;
+        return data;
       }
 
-      // Only prominent artists render image textures in global view (constant, zero zoom thresholds)
-      const isProminent = Boolean(data.isHeadliner || size >= 3.2);
-
-      return {
-        ...data,
-        type: hasImage && isProminent ? 'image' : 'circle',
-        size,
-        color: originalColor,
-        isSelected: false,
-        isNeighbor: false,
-        zIndex: invertedZ
-      };
+      // 3. Global Default View
+      data.type = naturalType;
+      data.image = hasImage ? data.image : null;
+      data.size = size;
+      data.color = originalColor;
+      data.isSelected = false;
+      data.isNeighbor = false;
+      data.zIndex = invertedZ;
+      return data;
     });
 
     sigma.refresh();

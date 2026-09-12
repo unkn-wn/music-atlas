@@ -125,6 +125,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 <img
                   src={artist.image}
                   alt={artist.label}
+                  referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
                   className="w-9 h-9 rounded-full object-cover shrink-0 border border-white/20"
                   onError={(e) => {
                     (e.target as HTMLElement).style.display = 'none';

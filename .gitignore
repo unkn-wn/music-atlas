@@ -5,7 +5,5 @@
 web/public/data
 web/dist
 
-pipeline/output
-
 pipeline/.env
 **/.env

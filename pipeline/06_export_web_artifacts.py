@@ -196,7 +196,7 @@ def main():
             "followers": subs,
             "monthlyListeners": subs,
             "subscribers": subs,
-            "subscribersFormatted": meta.get("subscribersFormatted", f"{subs:,}"),
+            "subscribersFormatted": meta.get("subscribersFormatted") or meta.get("formattedSubscribers") or f"{subs:,}",
             "primaryGenre": meta.get("primaryGenre") or comm_info.get("primaryGenre", "Other"),
             "macroGenre": comm_info.get("continentName", meta.get("primaryGenre", "Other")),
             "genres": meta.get("topSubgenres", meta.get("genres", [])),
@@ -205,6 +205,7 @@ def main():
             "previewUrl": meta.get("previewUrl", ""),
             "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{meta['name']}"),
+            "deezerUrl": meta.get("deezerUrl", ""),
             "sharedPlaylistsCount": c_i,
             "topCrossovers": adaptive_connections
         })

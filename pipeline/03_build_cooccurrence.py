@@ -47,7 +47,13 @@ def main():
         playlists = json.load(f)
 
     catalog_artist_ids = {a["id"] for a in catalog}
-    catalog_artist_names = {a["name"].lower().strip(): a["id"] for a in catalog}
+    catalog_artist_names = {}
+    for a in catalog:
+        aid = a["id"]
+        if "name" in a:
+            catalog_artist_names[a["name"].lower().strip()] = aid
+        if "scraped_name" in a:
+            catalog_artist_names[a["scraped_name"].lower().strip()] = aid
 
     unique_artists = sorted(list(catalog_artist_ids))
     a_to_idx = {a_id: idx for idx, a_id in enumerate(unique_artists)}

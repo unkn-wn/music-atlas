@@ -74,7 +74,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
   return (
     <div className="relative w-full max-w-md" ref={dropdownRef}>
-      <div className="glass-panel flex items-center px-3.5 py-2.5 shadow-xl transition-all focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
+      <div className="glass-panel h-10 flex items-center px-3.5 shadow-xl transition-all focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
         <Search className="w-4 h-4 text-slate-400 mr-2.5 shrink-0" />
         <input
           ref={inputRef}
@@ -90,11 +90,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         />
         {query && (
           <button
+            type="button"
             onClick={() => {
               setQuery('');
               inputRef.current?.focus();
             }}
-            className="p-1 hover:text-white text-slate-400"
+            className="p-0.5 hover:text-white text-slate-400 flex items-center justify-center shrink-0 bg-transparent border-none outline-none cursor-pointer leading-none ml-1.5"
+            title="Clear search"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -108,7 +110,12 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       {isOpen && filteredArtists.length > 0 && (
         <div className="absolute left-0 right-0 top-full mt-2 glass-panel p-1.5 shadow-2xl z-50 max-h-96 overflow-y-auto border border-white/20">
           {filteredArtists.map((artist) => {
-            const subtitle = `${artist.primaryGenre || artist.continentName || 'Artist'} • ${artist.topSubgenres?.[0] || 'Artist'}`;
+            const primary = artist.primaryGenre || artist.continentName || '';
+            const subgenre = artist.topSubgenres?.[0] || (artist.genres && artist.genres[0]) || '';
+            const genreDisplay = [primary, subgenre]
+              .filter((g) => g && g.toLowerCase() !== 'artist' && g.toLowerCase() !== 'other' && g.toLowerCase() !== 'eclectic')
+              .filter((g, idx, arr) => arr.indexOf(g) === idx)
+              .join(' • ') || primary || 'Artist';
 
             return (
               <button
@@ -122,27 +129,31 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                   selectedArtistId === artist.id ? 'bg-white/15' : 'hover:bg-white/10'
                 }`}
               >
-                <img
-                  src={artist.image}
-                  alt={artist.label}
-                  referrerPolicy="no-referrer"
-                  crossOrigin="anonymous"
-                  className="w-9 h-9 rounded-full object-cover shrink-0 border border-white/20"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-white truncate">{artist.label}</span>
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: artist.color }}
-                    />
-                  </div>
-                  <div className="text-xs text-slate-400 truncate">
-                    {subtitle}
-                  </div>
+                {/* Artist Icon with background border of that artist's color */}
+                <div
+                  className="w-9 h-9 rounded-full shrink-0 overflow-hidden flex items-center justify-center bg-white/5 border-2"
+                  style={{ borderColor: artist.color }}
+                >
+                  <img
+                    src={artist.image}
+                    alt={artist.label}
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+
+                {/* Vertically aligned Name and Genre */}
+                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                  <span className="text-sm font-semibold text-white truncate leading-tight">
+                    {artist.label}
+                  </span>
+                  <span className="text-xs text-slate-400 truncate mt-0.5 leading-tight">
+                    {genreDisplay}
+                  </span>
                 </div>
               </button>
             );

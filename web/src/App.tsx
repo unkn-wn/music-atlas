@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useTransition } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2 } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
@@ -11,7 +11,6 @@ import { AtlasNode } from './types/atlas';
 export const App: React.FC = () => {
   const { data, graph, loading, error } = useGraphData();
   const canvasRef = useRef<AtlasCanvasHandle | null>(null);
-  const [, startTransition] = useTransition();
 
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
@@ -29,11 +28,9 @@ export const App: React.FC = () => {
   // Drawer artist bound strictly to deliberate selection
   const drawerArtist = selectedArtist;
 
-  // Handlers with React 19 transition for non-blocking UI
+  // Immediate, synchronous artist selection (zero transition lag)
   const handleSelectArtist = (id: string | null, shouldFly: boolean = false) => {
-    startTransition(() => {
-      setSelectedArtistId(id);
-    });
+    setSelectedArtistId(id);
     if (id && shouldFly && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
@@ -48,12 +45,31 @@ export const App: React.FC = () => {
     }
   };
 
-  // Global Escape key shortcut to close drawer and reset view
+  // Active audio artist ref for keyboard shortcuts
+  const activeAudioArtistRef = useRef(activeAudioArtist);
+  activeAudioArtistRef.current = activeAudioArtist;
+
+  // Global keyboard shortcuts (Escape to reset view, Space to toggle active audio preview)
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInputFocused =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable);
+
       if (e.key === 'Escape') {
         setSelectedArtistId(null);
         canvasRef.current?.resetView();
+        return;
+      }
+
+      if ((e.code === 'Space' || e.key === ' ') && !isInputFocused) {
+        if (activeAudioArtistRef.current) {
+          e.preventDefault();
+          setIsPlayingAudio((prev) => !prev);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -173,6 +189,7 @@ export const App: React.FC = () => {
           className="pointer-events-none flex justify-end"
         >
           <ArtistDrawer
+            key={drawerArtist.id}
             artist={drawerArtist}
             onClose={() => setSelectedArtistId(null)}
             onSelectNeighbor={handleSelectArtist}

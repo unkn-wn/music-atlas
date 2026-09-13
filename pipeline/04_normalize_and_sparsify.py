@@ -32,6 +32,7 @@ PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
 
 C_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix.npz")
+C_RAW_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix_raw.npz")
 INDEX_FILE = os.path.join(OUTPUT_DIR, "artist_index.json")
 CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 EDGES_FILE = os.path.join(OUTPUT_DIR, "sparsified_edges.json")
@@ -59,10 +60,13 @@ def main():
 
     print("=" * 70)
     print(" STAGE 4B: SALTON'S COSINE NORMALIZATION & EVIDENCE DEGREE BOUNDING")
+    print(" Dual Matrices: Damped weights for cosine & Raw integer counts for crossovers")
     print("=" * 70)
     start_time = time.time()
 
-    C = sp.load_npz(C_FILE).tocsr()
+    C_damped = sp.load_npz(C_FILE).tocsr()
+    C_raw = sp.load_npz(C_RAW_FILE).tocsr() if os.path.exists(C_RAW_FILE) else C_damped.copy()
+
     with open(INDEX_FILE, "r", encoding="utf-8") as f:
         meta = json.load(f)
     with open(CATALOG_FILE, "r", encoding="utf-8") as f:
@@ -75,9 +79,10 @@ def main():
     artist_subgenres = {a["id"]: a.get("topSubgenres", ["Pop"]) for a in catalog}
     artist_primary_genres = {a["id"]: a.get("primaryGenre", "Pop") for a in catalog}
 
-    marginals = C.diagonal().copy()
+    marginals_damped = C_damped.diagonal().copy()
+    marginals_raw = C_raw.diagonal().copy()
     print(f"Total artists in matrix: {num_artists}")
-    print(f"Marginal frequency range: min={marginals.min()}, median={np.median(marginals)}, max={marginals.max()}")
+    print(f"Marginal raw playlist range: min={marginals_raw.min()}, median={np.median(marginals_raw)}, max={marginals_raw.max()}")
 
     # 1. Salton's Cosine Normalization & Candidate Extraction
     print("Computing Salton's Cosine similarity for all edge pairs...")
@@ -85,44 +90,50 @@ def main():
     all_scored_edges = {}
 
     for i in tqdm(range(num_artists), desc="Stage 4B: Cosine Normalization", unit="artist"):
-        c_i = marginals[i]
-        if c_i <= 0:
+        c_i_damped = marginals_damped[i]
+        c_i_raw = marginals_raw[i]
+        if c_i_damped <= 0 or c_i_raw <= 0:
             continue
 
-        row = C.getrow(i)
-        cols = row.indices
-        counts = row.data
+        row_damped = C_damped.getrow(i)
+        cols_damped = row_damped.indices
+        counts_damped = row_damped.data
 
-        for j, c_ij in zip(cols, counts):
-            if i >= j or c_ij <= 0:
+        row_raw = C_raw.getrow(i)
+        raw_map = dict(zip(row_raw.indices, row_raw.data))
+
+        for j, c_ij_damped in zip(cols_damped, counts_damped):
+            if i >= j or c_ij_damped <= 0:
                 continue
-            c_j = marginals[j]
-            if c_j <= 0:
+            c_j_damped = marginals_damped[j]
+            c_j_raw = marginals_raw[j]
+            if c_j_damped <= 0 or c_j_raw <= 0:
                 continue
 
-            # Superstar Fluke Filter: if either artist has c >= 30, require c_ij >= 2
-            if (c_i >= 30 or c_j >= 30) and c_ij < 2:
+            c_ij_raw = int(raw_map.get(j, 0))
+
+            # Superstar Fluke Filter: if either artist has c_raw >= 30, require c_ij_raw >= 2
+            if (c_i_raw >= 30 or c_j_raw >= 30) and c_ij_raw < 2:
                 continue
 
-            sim = float(c_ij / math.sqrt(c_i * c_j))
+            sim = float(c_ij_damped / math.sqrt(c_i_damped * c_j_damped))
             
             # Minimum Weight Cutoff
             if sim < 0.08:
                 continue
 
             pair = (i, j)
-            all_scored_edges[pair] = (sim, float(c_ij))
-            candidates[i].append((j, sim, float(c_ij)))
-            candidates[j].append((i, sim, float(c_ij)))
+            all_scored_edges[pair] = (sim, c_ij_raw)
+            candidates[i].append((j, sim, c_ij_raw))
+            candidates[j].append((i, sim, c_ij_raw))
 
     for i in range(num_artists):
         candidates[i].sort(key=lambda x: x[1], reverse=True)
 
     # 2. Dynamic Evidence-Scaled Degree Bounds & Mutual Nearest Neighbor (MNN) Edge Protection
-    # d_max(i) = min(28, max(4, floor(sqrt(c_i) * 4.5)))
     degree_bounds = {}
     for i in range(num_artists):
-        c_i = marginals[i]
+        c_i = marginals_raw[i]
         d_bound = min(24, max(4, int(math.floor(math.sqrt(max(1, c_i)) * 4.0))))
         degree_bounds[i] = d_bound
 
@@ -221,7 +232,7 @@ def main():
         scored_pairs.sort(key=lambda x: x[0], reverse=True)
         for sim, c_ij, pair in scored_pairs[:3]:
             final_edges.add(pair)
-            edge_data_map[pair] = (max(0.12, sim), max(1.0, c_ij))
+            edge_data_map[pair] = (max(0.12, sim), max(1, int(c_ij)))
             bridge_edges.add(pair)
             bridges_added += 1
 
@@ -246,7 +257,7 @@ def main():
             for sem_sim, pair in semantic_candidates:
                 if pair not in final_edges:
                     final_edges.add(pair)
-                    edge_data_map[pair] = (0.12, 1.0)
+                    edge_data_map[pair] = (0.12, 1)
                     bridge_edges.add(pair)
                     bridges_added += 1
                     if bridges_added >= 3:
@@ -276,8 +287,8 @@ def main():
     formatted_edges = []
     for (i, j) in final_edges:
         sim, c_ij = edge_data_map[(i, j)]
-        c_i = marginals[i]
-        c_j = marginals[j]
+        c_i = marginals_raw[i]
+        c_j = marginals_raw[j]
         # Enforce non-zero layout weight floor
         norm_weight = 0.06 + 0.94 * ((sim - min_sim) / sim_range)
 

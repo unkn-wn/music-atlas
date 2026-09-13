@@ -22,7 +22,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(30);
   const [currentTime, setCurrentTime] = useState(0);
-  const [volume, setVolume] = useState(0.8);
+  const [volume, setVolume] = useState(0.2);
   const [isMuted, setIsMuted] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [resolvedTitle, setResolvedTitle] = useState<string | null>(null);
@@ -90,6 +90,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             setResolvedTitle(result.trackTitle);
           }
           audioRef.current.src = result.previewUrl;
+          audioRef.current.volume = isMuted ? 0 : volume;
           audioRef.current.currentTime = 0;
           try {
             await audioRef.current.play();

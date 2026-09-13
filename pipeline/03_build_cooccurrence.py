@@ -23,12 +23,15 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+from sanitizer import split_artist_names
+
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
 
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
 CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 MATRIX_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix.npz")
+MATRIX_RAW_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix_raw.npz")
 INDEX_FILE = os.path.join(OUTPUT_DIR, "artist_index.json")
 
 def main():
@@ -37,7 +40,7 @@ def main():
 
     print("=" * 70)
     print(" STAGE 3: SPARSE CSR BIPARTITE PROJECTION (C = M^T * M)")
-    print(" Weighting: W_ij = sum_{P | i,j in P} 1 / log2(|P|)")
+    print(" Dual Projection: C_raw (factual shared playlists) & C_damped (inverse-log layout)")
     print("=" * 70)
     start_time = time.time()
 
@@ -62,22 +65,32 @@ def main():
 
     row_ind = []
     col_ind = []
-    data_val = []
+    data_damped_val = []
+    data_raw_val = []
 
     for p_idx, pl in enumerate(tqdm(playlists, desc="Stage 3: Projecting Co-occurrences", unit="pl")):
         seen_artists_in_pl = set()
         for t in pl.get("tracks", []):
             a_id = t.get("artist_id")
-            a_name = t.get("artist_name", "").lower().strip()
-            resolved_id = None
-            if a_id and a_id in a_to_idx:
-                resolved_id = a_id
-            elif a_name in catalog_artist_names:
-                resolved_id = catalog_artist_names[a_name]
+            raw_a_name = t.get("artist_name", "")
+            a_name = raw_a_name.lower().strip()
 
-            if resolved_id and resolved_id in a_to_idx:
-                col = a_to_idx[resolved_id]
-                seen_artists_in_pl.add(col)
+            resolved_ids = []
+            if a_id and a_id in a_to_idx:
+                resolved_ids.append(a_id)
+            elif a_name in catalog_artist_names:
+                resolved_ids.append(catalog_artist_names[a_name])
+            else:
+                # Resolve split collaboration names (e.g. "Drake & Future")
+                splits = split_artist_names(raw_a_name)
+                for s in splits:
+                    s_clean = s.lower().strip()
+                    if s_clean in catalog_artist_names:
+                        resolved_ids.append(catalog_artist_names[s_clean])
+
+            for r_id in resolved_ids:
+                if r_id in a_to_idx:
+                    seen_artists_in_pl.add(a_to_idx[r_id])
 
         if seen_artists_in_pl:
             pl_size = max(2, len(seen_artists_in_pl))
@@ -85,7 +98,8 @@ def main():
             for col in seen_artists_in_pl:
                 row_ind.append(p_idx)
                 col_ind.append(col)
-                data_val.append(weight)
+                data_damped_val.append(weight)
+                data_raw_val.append(1.0)
 
     num_playlists = len(playlists)
     print(f"Bipartite graph dimensions: {num_playlists} playlists x {num_artists} surviving artists.")
@@ -93,16 +107,20 @@ def main():
 
     row_arr = np.array(row_ind, dtype=np.int32)
     col_arr = np.array(col_ind, dtype=np.int32)
-    data_arr = np.array(data_val, dtype=np.float32)
+    data_damped_arr = np.array(data_damped_val, dtype=np.float32)
+    data_raw_arr = np.array(data_raw_val, dtype=np.float32)
 
-    M = sp.csr_matrix((data_arr, (row_arr, col_arr)), shape=(num_playlists, num_artists))
+    M_damped = sp.csr_matrix((data_damped_arr, (row_arr, col_arr)), shape=(num_playlists, num_artists))
+    M_raw = sp.csr_matrix((data_raw_arr, (row_arr, col_arr)), shape=(num_playlists, num_artists))
 
-    print("Computing damped sparse co-occurrence projection: C = M^T * M ...")
-    C = (M.T @ M).tocsr()
+    print("Computing sparse co-occurrence projections: C_damped and C_raw ...")
+    C_damped = (M_damped.T @ M_damped).tocsr()
+    C_raw = (M_raw.T @ M_raw).tocsr()
 
-    print(f"Co-occurrence matrix computed: shape={C.shape}, non-zero elements={C.nnz}")
+    print(f"Co-occurrence matrices computed: shape={C_damped.shape}, non-zero elements={C_damped.nnz}")
 
-    sp.save_npz(MATRIX_FILE, C)
+    sp.save_npz(MATRIX_FILE, C_damped)
+    sp.save_npz(MATRIX_RAW_FILE, C_raw)
 
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump({
@@ -112,7 +130,7 @@ def main():
             "num_playlists": num_playlists
         }, f, indent=2)
 
-    print(f"Stage 3 complete in {time.time() - start_time:.2f}s. Saved {MATRIX_FILE} and {INDEX_FILE}")
+    print(f"Stage 3 complete in {time.time() - start_time:.2f}s. Saved {MATRIX_FILE}, {MATRIX_RAW_FILE} and {INDEX_FILE}")
     print("=" * 70)
 
 if __name__ == "__main__":

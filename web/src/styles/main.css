@@ -136,6 +136,8 @@ html, body, #root {
 
 .h-full { height: 100%; }
 .h-screen { height: 100vh; }
+.h-56 { height: 14rem; }
+.aspect-square { aspect-ratio: 1 / 1; }
 .h-44 { height: 11rem; }
 .h-32 { height: 8rem; }
 .h-12 { height: 3rem; }
@@ -203,14 +205,20 @@ html, body, #root {
 .rounded-full { border-radius: 9999px; }
 
 .border { border-width: 1px; border-style: solid; }
+.border-2 { border-width: 2px; border-style: solid; }
 .border-l { border-left-width: 1px; border-left-style: solid; }
 .border-none { border: none; }
 .outline-none { outline: 2px solid transparent; outline-offset: 2px; }
+
+.leading-tight { line-height: 1.25; }
+.leading-none { line-height: 1; }
+.p-0\.5 { padding: 0.125rem; }
 
 .border-white\/10 { border-color: rgba(255, 255, 255, 0.1); }
 .border-white\/15 { border-color: rgba(255, 255, 255, 0.15); }
 .border-white\/20 { border-color: rgba(255, 255, 255, 0.2); }
 .border-white\/40 { border-color: rgba(255, 255, 255, 0.4); }
+.border-emerald-500\/30 { border-color: rgba(16, 185, 129, 0.3); }
 .border-emerald-500\/40 { border-color: rgba(16, 185, 129, 0.4); }
 .border-emerald-500\/50 { border-color: rgba(16, 185, 129, 0.5); }
 .border-cyan-800\/50 { border-color: rgba(21, 94, 117, 0.5); }
@@ -226,10 +234,12 @@ html, body, #root {
 .bg-black\/90 { background-color: rgba(0, 0, 0, 0.9); }
 .bg-emerald-500 { background-color: #10b981; }
 .bg-emerald-400 { background-color: #34d399; }
+.bg-emerald-500\/15 { background-color: rgba(16, 185, 129, 0.15); }
 .bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.2); }
 .bg-cyan-950\/40 { background-color: rgba(8, 51, 68, 0.4); }
 .bg-slate-800 { background-color: #1e293b; }
 .bg-slate-900 { background-color: #0f172a; }
+.bg-slate-950 { background-color: #020617; }
 .bg-\[\#07090e\] { background-color: #07090e; }
 .bg-\[\#1DB954\]\/20 { background-color: rgba(29, 185, 84, 0.2); }
 .bg-\[\#1DB954\]\/30 { background-color: rgba(29, 185, 84, 0.3); }
@@ -284,9 +294,22 @@ html, body, #root {
 .shadow-xl { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2); }
 .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
 
+.object-cover { object-fit: cover; }
+.object-top { object-position: top; }
+
+.opacity-0 { opacity: 0; }
+.opacity-35 { opacity: 0.35; }
+.opacity-60 { opacity: 0.6; }
+.opacity-100 { opacity: 1; }
+
+.blur-xl { filter: blur(24px); }
+.scale-125 { transform: scale(1.25); }
+
 .transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
 .transition-colors { transition-property: color, background-color, border-color; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
 .transition-transform { transition-property: transform; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-opacity { transition-property: opacity; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 300ms; }
+.duration-300 { transition-duration: 300ms; }
 
 button {
   background: none;
@@ -377,6 +400,20 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Pulse Animation */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 /* Sigma Canvas Layering: ensure hover WebGL fill sits behind 2D labels and hovers avatars */

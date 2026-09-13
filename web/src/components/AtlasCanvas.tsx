@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react
 import Sigma from 'sigma';
 import Graph from 'graphology';
 import EdgeCurveProgram from '@sigma/edge-curve';
-import { createNodeImageProgram } from '@sigma/node-image';
 import { NodeCircleProgram, EdgeLineProgram } from 'sigma/rendering';
 
 export interface AtlasCanvasHandle {
@@ -19,15 +18,57 @@ interface AtlasCanvasProps {
   selectedContinentId: number | null;
 }
 
-const NodeImageProgram = createNodeImageProgram({
-  keepWithinCircle: true,
-  drawingMode: 'background',
-  objectFit: 'cover',
-  imageAttribute: 'image',
-  size: { mode: 'max', value: 128 },
-  maxTextureSize: 2048,
-  debounceTimeout: 150
-});
+function optimizeAvatarUrl(rawUrl: string): string {
+  let url = rawUrl.trim();
+  if (url.startsWith('//')) {
+    url = 'https:' + url;
+  }
+  if (url.includes('dzcdn.net')) {
+    return url.replace(/\d+x\d+-/, '64x64-');
+  }
+  if (url.includes('i.scdn.co/image/ab6761610000e5eb')) {
+    return url.replace('ab6761610000e5eb', 'ab6761610000f178');
+  }
+  return url;
+}
+
+const MAX_CACHED_AVATARS = 500;
+const avatarCache = new Map<string, HTMLImageElement>();
+const failedAvatars = new Set<string>();
+
+function getAvatarImage(rawUrl: string | undefined | null, onLoaded?: () => void): HTMLImageElement | null {
+  if (!rawUrl || rawUrl.includes('d41d8cd98f00b204e9800998ecf8427e')) return null;
+  const url = optimizeAvatarUrl(rawUrl);
+  if (failedAvatars.has(url)) return null;
+
+  const cached = avatarCache.get(url);
+  if (cached) {
+    // Refresh LRU order: re-insert so it becomes the most recently used
+    avatarCache.delete(url);
+    avatarCache.set(url, cached);
+    return cached.complete && cached.naturalWidth > 0 ? cached : null;
+  }
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    if (onLoaded) onLoaded();
+  };
+  img.onerror = () => {
+    failedAvatars.add(url);
+    avatarCache.delete(url);
+  };
+  img.src = url;
+
+  // Evict least-recently-used (oldest) entry if exceeding capacity
+  if (avatarCache.size >= MAX_CACHED_AVATARS) {
+    const oldestKey = avatarCache.keys().next().value;
+    if (oldestKey) avatarCache.delete(oldestKey);
+  }
+
+  avatarCache.set(url, img);
+  return null;
+}
 
 const rgbaCache = new Map<string, string>();
 
@@ -152,11 +193,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       labelSize: 12,
       labelWeight: '700',
       labelColor: { color: '#ffffff' },
-      labelDensity: 0.22,
-      labelGridCellSize: 110,
+      labelDensity: 0.35,
+      labelGridCellSize: 90,
       labelRenderedSizeThreshold: 8.5,
       minCameraRatio: 0.008,
       maxCameraRatio: 2.2,
+      doubleClickZoomingRatio: 1,
       enableEdgeEvents: false,
       allowInvalidContainer: true,
       stagePadding: 80,
@@ -165,8 +207,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       defaultEdgeType: 'curve',
       defaultNodeType: 'circle',
       nodeProgramClasses: {
-        circle: NodeCircleProgram,
-        image: NodeImageProgram
+        circle: NodeCircleProgram
       },
       edgeProgramClasses: {
         curve: EdgeCurveProgram,
@@ -198,9 +239,9 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         // Artist name label text beneath node with strict Screen-Space Collision Detection
         if (data.label) {
           // Label budget: Selected node and direct neighbors are ALWAYS rendered!
-          // For general background stars, cap at maximum 35 visible labels per frame
+          // For general background stars, cap at maximum 100 visible labels per frame
           // to eliminate 2D canvas text layout stuttering during zoom and pan.
-          if (!data.isSelected && !data.isNeighbor && renderedLabelCountRef.current >= 35) {
+          if (!data.isSelected && !data.isNeighbor && renderedLabelCountRef.current >= 100) {
             return;
           }
 
@@ -229,6 +270,36 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           collisionGridRef.current.insert(labelBox);
           renderedLabelCountRef.current += 1;
 
+          // 1:1 Avatar Rendering: Render avatar strictly when its label is rendered!
+          const rawImageUrl = data.originalImage || data.image;
+          const img = getAvatarImage(rawImageUrl, () => {
+            sigmaRef.current?.scheduleRender();
+          });
+
+          if (img) {
+            context.save();
+            context.beginPath();
+            context.arc(x, y, radius, 0, Math.PI * 2);
+            context.closePath();
+            context.clip();
+
+            // Center-crop (object-fit: cover)
+            const nw = img.naturalWidth;
+            const nh = img.naturalHeight;
+            const minDim = Math.min(nw, nh);
+            const sx = (nw - minDim) / 2;
+            const sy = (nh - minDim) / 2;
+            context.drawImage(img, sx, sy, minDim, minDim, x - radius, y - radius, radius * 2, radius * 2);
+            context.restore();
+
+            // Crisp border ring around the avatar matching artist/continent color
+            context.beginPath();
+            context.arc(x, y, radius, 0, Math.PI * 2);
+            context.strokeStyle = strokeColor;
+            context.lineWidth = Math.max(1.2, radius * 0.08);
+            context.stroke();
+          }
+
           context.textAlign = 'center';
           context.textBaseline = 'top';
 
@@ -248,34 +319,66 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         const x = data.x;
         const y = data.y;
 
-        // Proportional hover ring that maintains constant visual distance away from artist circle
-        const ringRadius = radius + Math.max(6.0, radius * 0.22);
+        // 1. Draw Artist Picture (Avatar) - strictly at natural node radius (no enlargement)
+        const rawImageUrl = data.originalImage || data.image;
+        const img = getAvatarImage(rawImageUrl, () => {
+          sigmaRef.current?.scheduleRender();
+        });
+
+        if (img) {
+          context.save();
+          context.beginPath();
+          context.arc(x, y, radius, 0, Math.PI * 2);
+          context.closePath();
+          context.clip();
+
+          // Center-crop (object-fit: cover)
+          const nw = img.naturalWidth;
+          const nh = img.naturalHeight;
+          const minDim = Math.min(nw, nh);
+          const sx = (nw - minDim) / 2;
+          const sy = (nh - minDim) / 2;
+          context.drawImage(img, sx, sy, minDim, minDim, x - radius, y - radius, radius * 2, radius * 2);
+          context.restore();
+
+          // Crisp border ring around avatar matching artist/continent color
+          context.beginPath();
+          context.arc(x, y, radius, 0, Math.PI * 2);
+          context.strokeStyle = strokeColor;
+          context.lineWidth = Math.max(1.2, radius * 0.08);
+          context.stroke();
+        }
+
+        // 2. Proportional outer hover ring
+        const ringRadius = radius + Math.max(3.0, radius * 0.18);
         context.beginPath();
         context.arc(x, y, ringRadius, 0, Math.PI * 2);
         context.strokeStyle = strokeColor;
         context.lineWidth = Math.max(2.0, radius * 0.08);
         context.stroke();
 
-        // Only draw hover text if the node does not already have a visible label rendered
-        if (data.label) return;
+        // 3. Artist name label text beneath hovered node
+        const labelText = data.originalLabel || data.label || '';
+        if (labelText) {
+          const size = settings.labelSize || 12;
+          const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
+          const weight = settings.labelWeight || '700';
+          context.font = `${weight} ${size}px ${font}`;
 
-        const labelText = data.originalLabel || '';
-        if (!labelText) return;
-        const size = settings.labelSize || 12;
-        const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
-        context.font = `700 ${size}px ${font}`;
-        context.textAlign = 'center';
-        context.textBaseline = 'top';
+          const yOffset = y + radius + 8;
 
-        // Offset label from outer ring edge to avoid visual overlap
-        const yOffset = y + ringRadius + 6;
+          context.textAlign = 'center';
+          context.textBaseline = 'top';
 
-        context.lineWidth = 3.5;
-        context.strokeStyle = 'rgba(7, 9, 14, 0.95)';
-        context.strokeText(labelText, x, yOffset);
+          // Strong halo outline for high contrast
+          context.lineWidth = 3.5;
+          context.strokeStyle = 'rgba(7, 9, 14, 0.95)';
+          context.strokeText(labelText, x, yOffset);
 
-        context.fillStyle = strokeColor;
-        context.fillText(labelText, x, yOffset);
+          // Crisp white text
+          context.fillStyle = '#ffffff';
+          context.fillText(labelText, x, yOffset);
+        }
       }
     });
 
@@ -283,16 +386,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       collisionGridRef.current.clear();
       renderedLabelCountRef.current = 0;
     });
-
-    // Wire up NodeImageProgram texture manager event so newly downloaded avatar images
-    // immediately re-index and display without requiring camera movement or user interaction
-    const onNewTexture = () => {
-      sigma.refresh();
-    };
-    const tm = (NodeImageProgram as any).textureManager;
-    if (tm && typeof tm.on === 'function') {
-      tm.on('newTexture', onNewTexture);
-    }
 
     const camera = sigma.getCamera();
     camera.setState({ x: 0.5, y: 0.5, ratio: 1.0 });
@@ -320,10 +413,16 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       onSelectNodeRef.current(null);
     });
 
+    // Natively suppress Sigma default double-click and double-tap zoom
+    sigma.getMouseCaptor().on('doubleClick', (e) => {
+      e.preventSigmaDefault();
+    });
+
+    sigma.getTouchCaptor().on('doubletap', (e) => {
+      e.preventSigmaDefault();
+    });
+
     return () => {
-      if (tm && typeof tm.off === 'function') {
-        tm.off('newTexture', onNewTexture);
-      }
       sigmaRef.current = null;
       sigma.kill();
     };
@@ -527,16 +626,16 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
       // Inverted z-index: smaller artists get higher z-index so they remain hoverable/clickable over larger artists
       const invertedZ = Math.max(1, Math.round(100 - (size || 1.1)));
-      const hasImage = Boolean(data.image && !data.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
-      const isProminent = Boolean(data.isHeadliner || size >= 3.2);
-      const naturalType = hasImage && isProminent ? 'image' : 'circle';
+      const originalImage = (data.originalImage || data.image || '') as string;
+
+      data.type = 'circle';
+      data.originalImage = originalImage;
+      data.image = originalImage;
 
       // 1. When an artist is selected: focal artist and connected peers display image and label
       if (selectedNodeId) {
         if (node === selectedNodeId) {
-          data.type = naturalType;
-          data.image = hasImage ? data.image : null;
-          data.size = Math.max(size, 2.8);
+          data.size = size;
           data.color = originalColor;
           data.forceLabel = true;
           data.label = originalLabel;
@@ -547,8 +646,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         }
 
         if (neighborIds.has(node)) {
-          data.type = naturalType;
-          data.image = hasImage ? data.image : null;
           data.size = size;
           data.color = originalColor;
           data.forceLabel = true;
@@ -559,11 +656,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           return data;
         }
 
-        // Unselected background nodes: retain naturalType (ZERO buffer reallocation)
-        // Set image to null so avatar textures are NOT rendered, cleanly falling back to dimmed circle color
-        data.type = naturalType;
-        data.image = null;
-        data.size = Math.max(0.6, size * 0.7);
+        // Unselected background nodes
+        data.size = size;
         data.color = hexToRgba(originalColor, 0.20);
         data.label = null;
         data.forceLabel = false;
@@ -575,9 +669,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
 
       // 2. Continent Filtering (Global View)
       if (selectedContinentId !== null && continentId !== selectedContinentId) {
-        data.type = naturalType;
-        data.image = null;
-        data.size = Math.max(0.6, size * 0.5);
+        data.size = size;
         data.color = hexToRgba('#324155', 0.08);
         data.label = null;
         data.forceLabel = false;
@@ -588,10 +680,10 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       }
 
       // 3. Global Default View
-      data.type = naturalType;
-      data.image = hasImage ? data.image : null;
       data.size = size;
       data.color = originalColor;
+      data.label = originalLabel;
+      data.forceLabel = false;
       data.isSelected = false;
       data.isNeighbor = false;
       data.zIndex = invertedZ;

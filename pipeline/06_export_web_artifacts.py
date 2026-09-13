@@ -141,13 +141,13 @@ def main():
             "crossoverPercent": round(float(pct_dst), 1)
         })
 
-    # 2. Compute subscriber scaling range for empirical node sizing
+    # 2. Compute subscriber scaling range for empirical node sizing using Log10-Power scaling
     all_subs = [max(1000, a.get("subscribers", 1000)) for a in catalog_map.values()]
     min_subs = min(all_subs) if all_subs else 1000
-    max_subs = max(all_subs) if all_subs else 50_000_000
-    sqrt_min = math.sqrt(min_subs)
-    sqrt_max = math.sqrt(max_subs)
-    sqrt_diff = (sqrt_max - sqrt_min) or 1.0
+    max_subs = max(all_subs) if all_subs else 25_000_000
+    log_min = math.log10(min_subs)
+    log_max = math.log10(max_subs)
+    log_diff = (log_max - log_min) or 1.0
 
     # Top 400 global headliners by subscribers
     sorted_by_subs = sorted(catalog_map.values(), key=lambda a: a.get("subscribers", 0), reverse=True)
@@ -166,17 +166,17 @@ def main():
         })
 
         subs = max(1000, meta.get("subscribers", 1000))
-        # Non-linear scaling: 1.1px for small/niche artists up to 14.5px for mega-artists (prevents node occlusion)
-        ratio = (math.sqrt(subs) - sqrt_min) / sqrt_diff
+        # Log10-Power scaling (Option A: gamma=2.6): 1.1px for <1k niche up to 14.5px for superstars, with 200k at ~3.8px
+        ratio = (math.log10(subs) - log_min) / log_diff
         ratio = max(0.0, min(1.0, ratio))
-        node_size = round(1.1 + (ratio ** 1.3) * 13.4, 1)
+        node_size = round(1.1 + (ratio ** 2.6) * 13.4, 1)
 
         is_headliner = a_id in headliner_ids
         has_valid_image = bool(meta.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in meta.get("image", ""))
         node_type = "image" if (is_headliner and has_valid_image) else "circle"
 
         # Apply Adaptive Connection Rule for topCrossovers (dynamic 6 to 20)
-        c_i = meta.get("sharedPlaylistsCount", len(raw_neighbors[a_id]))
+        c_i = meta.get("totalPlaylists") or meta.get("sharedPlaylistsCount") or len(raw_neighbors[a_id])
         adaptive_connections = compute_adaptive_neighbors(a_id, raw_neighbors[a_id], c_i)
 
         nodes.append({
@@ -206,6 +206,7 @@ def main():
             "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{meta['name']}"),
             "deezerUrl": meta.get("deezerUrl", ""),
+            "totalPlaylists": c_i,
             "sharedPlaylistsCount": c_i,
             "topCrossovers": adaptive_connections
         })

@@ -23,13 +23,12 @@ export function useGraphData() {
         // Instantiate in-memory Graphology graph
         const g = new Graph({ type: 'undirected', multi: false });
 
-        // Add nodes: only prominent headliners/artists load image textures initially (prevents 13k texture blowout)
+        // Add nodes: all nodes rendered as circles in WebGL (avatars are drawn 1:1 on 2D canvas with visible labels)
         bundle.nodes.forEach((node) => {
-          const hasImage = Boolean(node.image && !node.image.includes('d41d8cd98f00b204e9800998ecf8427e'));
-          const isProminent = Boolean(node.isHeadliner || (node.size && node.size >= 3.2));
           g.addNode(node.id, {
             ...node,
-            type: hasImage && isProminent ? 'image' : 'circle',
+            type: 'circle',
+            originalImage: node.image,
             originalSize: node.size,
             originalColor: node.color,
             originalLabel: node.label

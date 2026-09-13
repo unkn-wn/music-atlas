@@ -410,7 +410,8 @@ def main():
                 "image": meta.get("image", ""),
                 "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{canonical_name}"),
                 "deezerUrl": meta.get("deezerUrl", ""),
-                "totalPlaylists": total_pl
+                "totalPlaylists": total_pl,
+                "sharedPlaylistsCount": total_pl
             }
 
             verified_catalog.append(catalog_entry)

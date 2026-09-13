@@ -48,7 +48,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
     return list.filter((g) => g && g.toLowerCase() !== 'eclectic' && g.toLowerCase() !== 'other');
   }, [artist.topSubgenres, artist.genres]);
 
-  const hasPreview = Boolean(artist.previewUrl);
+  const hasPreview = Boolean(artist.id || artist.label);
 
   const sidebarImageUrl = useMemo(() => {
     if (!artist.image) return '';
@@ -121,7 +121,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             if (hasPreview) onTogglePreview(artist);
           }}
           disabled={!hasPreview}
-          className={`absolute bottom-3 right-4 p-3 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center ${
+          className={`absolute bottom-3 right-4 w-12 h-12 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center shrink-0 ${
             hasPreview
               ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
               : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
@@ -134,7 +134,13 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
               : `Play 30s Audio Preview: ${artist.label}`
           }
         >
-          {isCurrentPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+          <div className="w-5 h-5 flex items-center justify-center shrink-0">
+            {isCurrentPlaying ? (
+              <Pause className="w-5 h-5 fill-current shrink-0" />
+            ) : (
+              <Play className="w-5 h-5 fill-current shrink-0" />
+            )}
+          </div>
         </button>
 
         {/* Artist Name, Primary Genre & Subgenre Pills */}

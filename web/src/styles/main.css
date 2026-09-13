@@ -114,6 +114,8 @@ html, body, #root {
 .w-52 { width: 13rem; }
 .w-32 { width: 8rem; }
 .w-16 { width: 4rem; }
+.w-12 { width: 3rem; }
+.w-11 { width: 2.75rem; }
 .w-10 { width: 2.5rem; }
 .w-9 { width: 2.25rem; }
 .w-8 { width: 2rem; }
@@ -136,6 +138,8 @@ html, body, #root {
 .h-screen { height: 100vh; }
 .h-44 { height: 11rem; }
 .h-32 { height: 8rem; }
+.h-12 { height: 3rem; }
+.h-11 { height: 2.75rem; }
 .h-10 { height: 2.5rem; }
 .h-9 { height: 2.25rem; }
 .h-8 { height: 2rem; }
@@ -360,6 +364,20 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .eq-bar:nth-child(1) { animation-delay: 0.1s; }
 .eq-bar:nth-child(2) { animation-delay: 0.3s; }
 .eq-bar:nth-child(3) { animation-delay: 0.5s; }
+
+/* Spinner Animation */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
 
 /* Sigma Canvas Layering: ensure hover WebGL fill sits behind 2D labels and hovers avatars */
 .sigma-hoverNodes { z-index: 1; }

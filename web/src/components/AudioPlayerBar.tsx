@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, ExternalLink } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, ExternalLink, Loader2 } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
+import { resolveArtistPreview } from '../utils/audioResolver';
 
 interface AudioPlayerBarProps {
   currentArtist: AtlasNode | null;
@@ -15,64 +16,109 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   onTogglePlay
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const activeArtistIdRef = useRef<string | null>(null);
+  const loadedSrcRef = useRef<string | null>(null);
+
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(30);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [resolvedTitle, setResolvedTitle] = useState<string | null>(null);
 
+  // Synchronously stop and purge old audio when artist changes
   useEffect(() => {
-    if (!audioRef.current || !currentArtist) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
+    }
+    loadedSrcRef.current = null;
+    activeArtistIdRef.current = currentArtist?.id || null;
+    setCurrentTime(0);
+    setProgress(0);
+    setResolvedTitle(null);
+    setIsLoadingAudio(false);
+  }, [currentArtist?.id]);
 
-    let isMounted = true;
+  // Volume & Mute control
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
 
-    const loadAndPlay = async () => {
-      const src = currentArtist.previewUrl;
-      const audioElement = audioRef.current;
+  // Playback & On-Demand Preview Resolution
+  useEffect(() => {
+    const audioElement = audioRef.current;
+    if (!audioElement || !currentArtist) return;
 
-      if (audioElement) {
-        audioElement.volume = isMuted ? 0 : volume;
-      }
+    if (!isPlaying) {
+      audioElement.pause();
+      setIsLoadingAudio(false);
+      return;
+    }
 
-      if (audioElement && audioElement.src && (!src || audioElement.src !== src)) {
-        audioElement.pause();
-      }
-
-      if (!src) {
-        if (isPlaying) onTogglePlay();
-        return;
-      }
-
-      if (audioElement && audioElement.src !== src) {
-        audioElement.src = src;
-        audioElement.currentTime = 0;
-        setCurrentTime(0);
-        setProgress(0);
-      }
-
-      if (isPlaying && audioElement) {
-        audioElement.play().catch((e) => {
-          if (!isMounted || e.name === 'AbortError') return;
-          console.warn("Audio playback error:", e);
+    // If audio is already loaded and ready for this exact artist, just play
+    if (loadedSrcRef.current && audioElement.src === loadedSrcRef.current) {
+      audioElement.play().catch((e: any) => {
+        if (e.name !== 'AbortError') {
+          console.warn("Playback resume error:", e);
           onTogglePlay();
-        });
-      } else if (audioElement) {
-        audioElement.pause();
-      }
-    };
+        }
+      });
+      return;
+    }
 
-    loadAndPlay();
+    // Resolve preview on demand
+    const targetArtistId = currentArtist.id;
+    activeArtistIdRef.current = targetArtistId;
+    setIsLoadingAudio(true);
 
-    return () => {
-      isMounted = false;
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-    };
-  }, [currentArtist, isPlaying]);
+    resolveArtistPreview(targetArtistId, currentArtist.label, currentArtist.topTrack)
+      .then(async (result) => {
+        // Discard if user switched artists while resolving
+        if (activeArtistIdRef.current !== targetArtistId) {
+          return;
+        }
+
+        if (result?.previewUrl && audioRef.current) {
+          loadedSrcRef.current = result.previewUrl;
+          if (result.trackTitle) {
+            setResolvedTitle(result.trackTitle);
+          }
+          audioRef.current.src = result.previewUrl;
+          audioRef.current.currentTime = 0;
+          try {
+            await audioRef.current.play();
+          } catch (e: any) {
+            if (e.name !== 'AbortError') {
+              console.warn("Audio play error:", e);
+              onTogglePlay();
+            }
+          }
+        } else {
+          console.warn("No preview available for:", currentArtist.label);
+          onTogglePlay();
+        }
+      })
+      .catch((err) => {
+        if (activeArtistIdRef.current === targetArtistId) {
+          console.warn("Preview resolve error:", err);
+          onTogglePlay();
+        }
+      })
+      .finally(() => {
+        if (activeArtistIdRef.current === targetArtistId) {
+          setIsLoadingAudio(false);
+        }
+      });
+  }, [currentArtist?.id, isPlaying]);
 
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
+    if (audioRef.current && !isLoadingAudio) {
       const cur = audioRef.current.currentTime;
       const dur = audioRef.current.duration || 30;
       setCurrentTime(cur);
@@ -108,7 +154,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
   if (!currentArtist) return null;
 
-  const hasPreview = Boolean(currentArtist.previewUrl);
+  const hasPreview = Boolean(currentArtist.id || currentArtist.label);
 
   return (
     <div className="glass-panel w-full max-w-2xl px-4 py-2.5 shadow-2xl flex items-center gap-4 pointer-events-auto border border-white/15 animate-in slide-in-from-bottom duration-300">
@@ -117,6 +163,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onEnded={() => onTogglePlay()}
         onError={() => {
+          if (!audioRef.current?.src || audioRef.current.src === window.location.href) return;
           if (isPlaying) onTogglePlay();
         }}
       />
@@ -144,13 +191,13 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           )}
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-bold text-white truncate" title={currentArtist.topTrack || currentArtist.label}>
-            {currentArtist.topTrack || currentArtist.label}
+          <div className="text-xs font-bold text-white truncate" title={resolvedTitle || currentArtist.topTrack || currentArtist.label}>
+            {resolvedTitle || currentArtist.topTrack || currentArtist.label}
           </div>
           <div className="text-[11px] text-slate-400 truncate flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentArtist.color }} />
             <span className="truncate">
-              {currentArtist.topTrack
+              {resolvedTitle || currentArtist.topTrack
                 ? `${currentArtist.label}${currentArtist.primaryGenre ? ` • ${currentArtist.primaryGenre}` : ''}`
                 : (currentArtist.primaryGenre || currentArtist.macroGenre || 'Audio Preview')}
             </span>
@@ -161,27 +208,27 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       {/* Play/Pause Button */}
       <button
         onClick={() => {
-          if (!hasPreview) return;
-          if (!isPlaying && audioRef.current && currentArtist?.previewUrl) {
-            audioRef.current.play().catch(() => {});
-          }
           onTogglePlay();
         }}
-        disabled={!hasPreview}
-        className={`p-2.5 rounded-full font-bold shadow-md transition-transform shrink-0 ${
-          hasPreview
-            ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
-            : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60"
-        }`}
+        disabled={isLoadingAudio}
+        className="w-10 h-10 rounded-full font-bold shadow-md transition-transform shrink-0 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
         title={
-          !hasPreview
-            ? "No audio preview available"
+          isLoadingAudio
+            ? "Resolving audio preview..."
             : isPlaying
             ? "Pause Preview"
             : "Play Preview"
         }
       >
-        {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+        <div className="w-4 h-4 flex items-center justify-center shrink-0">
+          {isLoadingAudio ? (
+            <Loader2 className="w-4 h-4 animate-spin shrink-0" strokeWidth={2.5} />
+          ) : isPlaying ? (
+            <Pause className="w-4 h-4 fill-current shrink-0" />
+          ) : (
+            <Play className="w-4 h-4 fill-current shrink-0" />
+          )}
+        </div>
       </button>
 
       {/* Scrubber & Time */}

@@ -142,24 +142,66 @@ def extract_track_artist(track: Dict, uploader_channels: Set[str]) -> Tuple[str,
 
     return "", None
 
+DISALLOWED_TRACK_PATTERNS = [
+    re.compile(r"\bplaylist\b", re.IGNORECASE),
+    re.compile(r"\bcompilation\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s*hours?\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s*hrs?\b", re.IGNORECASE),
+    re.compile(r"\bfull album\b", re.IGNORECASE),
+    re.compile(r"\bbest of 20\d\d\b", re.IGNORECASE),
+    re.compile(r"\btop \d+ songs\b", re.IGNORECASE),
+    re.compile(r"\bcontinuous mix\b", re.IGNORECASE),
+    re.compile(r"\bdj mix\b", re.IGNORECASE),
+    re.compile(r"\bdj set\b", re.IGNORECASE),
+    re.compile(r"\bnonstop\b", re.IGNORECASE),
+]
+
+def parse_duration_to_seconds(dur_str: str) -> int:
+    """Parses 'MM:SS' or 'HH:MM:SS' to seconds."""
+    if not dur_str:
+        return 0
+    parts = dur_str.strip().split(":")
+    try:
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except Exception:
+        return 0
+    return 0
+
 def is_catalog_qualified(track: Dict) -> bool:
     """
-    Catalog Release Qualification Guard:
-    Verifies that a track is an official release or catalog track with rich metadata,
-    preventing raw video rip uploads (which lack 'Recommended playlists' shelves)
-    from being chosen as anchor songs.
+    Strict Catalog Release Qualification Guard:
+    Verifies that a track is an authentic, official catalog release,
+    preventing 15m/1h/2h DJ mixes, video loops, and raw UGC uploads
+    (which lack 'Recommended playlists' shelves) from being chosen as anchor songs.
     """
-    if track.get("isExplicit") is not None:
-        return True
-    artists = track.get("artists") or []
-    if artists and isinstance(artists[0], dict):
-        cid = artists[0].get("id")
-        if cid and (cid.startswith("UC") or cid.startswith("MPRE") or cid.startswith("FEmusic")):
-            return True
+    title = track.get("title", "")
+    for pat in DISALLOWED_TRACK_PATTERNS:
+        if pat.search(title):
+            return False
+
+    dur_sec = track.get("duration_seconds")
+    if not dur_sec and track.get("duration"):
+        dur_sec = parse_duration_to_seconds(track.get("duration"))
+
+    # Legitimate singles/tracks are between 30 seconds and 10 minutes (600s)
+    if dur_sec is not None and dur_sec > 0:
+        if dur_sec < 30 or dur_sec > 600:
+            return False
+        if dur_sec > 600 and re.search(r"\bmix\b", title, re.IGNORECASE):
+            return False
+
+    vtype = track.get("videoType", "")
+    has_official_vtype = vtype in ("MUSIC_VIDEO_TYPE_ATV", "MUSIC_VIDEO_TYPE_OMV")
     album = track.get("album")
-    if album and isinstance(album, dict) and album.get("name"):
-        return True
-    return False
+    has_album = bool(album and isinstance(album, dict) and album.get("name") and album.get("name").strip())
+
+    if not (has_official_vtype or has_album):
+        return False
+
+    return True
 
 def load_checkpoint() -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, int], Set[str]]:
     """Loads existing harvesting state, sanitizing against legacy 'Sound of' or algorithmic playlists."""
@@ -186,22 +228,33 @@ def load_checkpoint() -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, 
 
             if is_system_or_algorithmic_playlist(title, author, author_id, browse_id):
                 continue
-            if not (10 <= len(tracks) <= 150):
+
+            cleaned_tracks = []
+            for t in tracks:
+                t_title = t.get("title", "")
+                if any(p.search(t_title) for p in DISALLOWED_TRACK_PATTERNS):
+                    continue
+                cleaned_tracks.append(t)
+
+            if not (10 <= len(cleaned_tracks) <= 150):
                 continue
-            if seen_authors[author_id] >= 2:
+            if author_id and seen_authors[author_id] >= 2 and author_id != "Community Curator":
                 continue
 
-            artist_names = [t.get("artist_name", "") for t in tracks if t.get("artist_name")]
+            artist_names = [t.get("artist_name", "") for t in cleaned_tracks if t.get("artist_name")]
             freq = Counter(artist_names)
             if freq and (max(freq.values()) / float(len(artist_names))) > 0.50:
                 continue
 
-            seen_authors[author_id] += 1
+            if author_id and author_id != "Community Curator":
+                seen_authors[author_id] += 1
+            pl["tracks"] = cleaned_tracks
             valid_playlists.append(pl)
             if genre and genre != "general":
                 for a_name in set(artist_names):
                     occ_map[a_name][genre] += 1
 
+        seen_authors.pop("Community Curator", None)
         completed_genres = set(state.get("completed_genres", []))
         print(f"Resuming from checkpoint: {len(completed_genres)} genres recorded, {len(valid_playlists)} valid community playlists retained.")
         return valid_playlists, occ_map, dict(seen_authors), completed_genres
@@ -334,13 +387,22 @@ def main():
         parsed_tracks = []
         track_artist_names = []
         for t in raw_tracks:
+            t_title = t.get("title", "")
+            if any(p.search(t_title) for p in DISALLOWED_TRACK_PATTERNS):
+                continue
+            dur_sec = t.get("duration_seconds")
+            if not dur_sec and t.get("duration"):
+                dur_sec = parse_duration_to_seconds(t.get("duration"))
+            if dur_sec is not None and dur_sec > 600:
+                continue
+
             clean_name, channel_id = extract_track_artist(t, uploader_channels)
             if not clean_name:
                 continue
             canonical_id = normalize_artist_id(clean_name, channel_id)
             parsed_tracks.append({
                 "videoId": t.get("videoId", ""),
-                "title": t.get("title", ""),
+                "title": t_title,
                 "artist_name": clean_name,
                 "artist_id": canonical_id,
                 "channel_id": channel_id or "",
@@ -505,17 +567,22 @@ def main():
                         if not r_bid or r_bid in existing_playlist_ids:
                             continue
 
-                        r_author = r_item.get("author", "Community Curator")
-                        r_author_id = r_author if isinstance(r_author, str) else f"rec_{r_bid[:8]}"
-
-                        if seen_authors.get(r_author_id, 0) >= 2:
-                            continue
-
                         r_pl_data = fetch_playlist_safely(r_bid)
                         if not r_pl_data:
                             continue
 
-                        r_valid_pl = process_and_validate_playlist(r_pl_data, r_bid, genre, str(r_author), r_author_id)
+                        r_author_obj = r_pl_data.get("author") or {}
+                        if isinstance(r_author_obj, dict):
+                            r_author_name = r_author_obj.get("name", "")
+                            r_author_id = r_author_obj.get("id") or r_author_name or f"anon_{r_bid[:8]}"
+                        else:
+                            r_author_name = str(r_author_obj)
+                            r_author_id = r_author_name or f"anon_{r_bid[:8]}"
+
+                        if seen_authors.get(r_author_id, 0) >= 2:
+                            continue
+
+                        r_valid_pl = process_and_validate_playlist(r_pl_data, r_bid, genre, r_author_name, r_author_id)
                         if r_valid_pl:
                             seen_authors[r_author_id] = seen_authors.get(r_author_id, 0) + 1
                             existing_playlist_ids.add(r_bid)

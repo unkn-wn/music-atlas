@@ -38,6 +38,7 @@ def main():
     parser = argparse.ArgumentParser(description="Master Execution Pipeline for Music Atlas.")
     parser.add_argument("--tier", type=int, choices=[1, 2, 3, 4], default=2, help="Scale tier (1=500, 2=1500, 3=3000, 4=6291)")
     parser.add_argument("--target-playlists", type=int, default=20, help="Target qualifying community playlists per genre in Stage 1 (default: 20)")
+    parser.add_argument("--max-anchors", type=int, default=8, help="Max anchor artists for Tier 2 recommendation discovery in Stage 1 (default: 8)")
     parser.add_argument("--min-playlists", type=int, default=4, help="Minimum playlist threshold c_i for candidate survival in Stage 2 (default: 4)")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; use disk cache & local snapshots")
     parser.add_argument("--skip-harvest", action="store_true", help="Skip Stages 0 and 1; start from Stage 2")
@@ -84,7 +85,7 @@ def main():
             if args.offline:
                 cmd.append("--offline")
         elif step_idx == 1:
-            cmd.extend(["--target-playlists", str(args.target_playlists)])
+            cmd.extend(["--target-playlists", str(args.target_playlists), "--max-anchors", str(args.max_anchors)])
             if args.fresh:
                 cmd.append("--fresh")
         elif step_idx == 2:

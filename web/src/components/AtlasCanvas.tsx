@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef, useState, useMemo } from 'react';
 import Sigma from 'sigma';
 import Graph from 'graphology';
-import EdgeCurveProgram from '@sigma/edge-curve';
 import { NodeCircleProgram, EdgeLineProgram } from 'sigma/rendering';
 
 export interface AtlasCanvasHandle {
@@ -16,6 +15,7 @@ interface AtlasCanvasProps {
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedContinentId: number | null;
+  hoveredContinentId?: number | null;
 }
 
 function optimizeAvatarUrl(rawUrl: string): string {
@@ -171,7 +171,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
   graph,
   selectedNodeId,
   onSelectNode,
-  selectedContinentId
+  selectedContinentId,
+  hoveredContinentId = null
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -204,13 +205,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       stagePadding: 80,
       defaultEdgeColor: 'rgba(148, 163, 184, 0.14)',
       defaultNodeColor: '#94a3b8',
-      defaultEdgeType: 'curve',
+      defaultEdgeType: 'line',
       defaultNodeType: 'circle',
       nodeProgramClasses: {
         circle: NodeCircleProgram
       },
       edgeProgramClasses: {
-        curve: EdgeCurveProgram,
         line: EdgeLineProgram
       },
       defaultDrawNodeLabel: (context: CanvasRenderingContext2D, data: any, settings: any) => {
@@ -451,10 +451,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       const nodeDisplayData = sigma.getNodeDisplayData(nodeId);
       if (!nodeDisplayData) return;
 
-      // Extract strictly active relative connections (topCrossovers) matching the selection reducer
-      const nodeAttrs = graph.getNodeAttributes(nodeId);
-      const crossovers = (nodeAttrs.topCrossovers as Array<{ neighborId: string }>) || [];
-      const targetIds = [nodeId, ...crossovers.map((c) => c.neighborId)].filter((id) => graph.hasNode(id));
+      // Extract focal node and its active graph neighbors
+      const targetIds = [nodeId, ...graph.neighbors(nodeId)];
       const targetDisplayData = targetIds
         .map((id) => sigma.getNodeDisplayData(id))
         .filter(Boolean);
@@ -559,16 +557,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const sigma = sigmaRef.current;
     const edgeMap = edgeLookupRef.current;
 
-    // Resolve all adaptive neighbor IDs (from topCrossovers AND graph edges)
+    // Resolve all active neighbor IDs from graph edges
     const neighborIds = new Set<string>();
     let selectedArtistColor = '#38bdf8';
     if (selectedNodeId && graph.hasNode(selectedNodeId)) {
       const nodeAttrs = graph.getNodeAttributes(selectedNodeId);
       selectedArtistColor = (nodeAttrs.color as string) || '#38bdf8';
-      const crossovers = (nodeAttrs.topCrossovers as Array<{ neighborId: string }>) || [];
-      crossovers.forEach((c) => {
-        neighborIds.add(c.neighborId);
-      });
       graph.forEachNeighbor(selectedNodeId, (nbr) => {
         neighborIds.add(nbr);
       });
@@ -693,11 +687,68 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     sigma.refresh();
   }, [graph, selectedNodeId, selectedContinentId]);
 
+  // Continent centroids for zero-overhead HTML pseudo-glow on hover (no WebGL redraws)
+  const continentCenters = useMemo(() => {
+    if (!graph) return new Map<number, { x: number; y: number; color: string }>();
+    const sums = new Map<number, { sumX: number; sumY: number; count: number; color: string }>();
+    graph.forEachNode((_node, attrs) => {
+      const cId = attrs.continentId as number;
+      if (!cId) return;
+      const entry = sums.get(cId) || { sumX: 0, sumY: 0, count: 0, color: (attrs.color as string) || '#10b981' };
+      entry.sumX += (attrs.x as number) || 0;
+      entry.sumY += (attrs.y as number) || 0;
+      entry.count += 1;
+      sums.set(cId, entry);
+    });
+    const centers = new Map<number, { x: number; y: number; color: string }>();
+    sums.forEach((val, cId) => {
+      if (val.count > 0) {
+        centers.set(cId, { x: val.sumX / val.count, y: val.sumY / val.count, color: val.color });
+      }
+    });
+    return centers;
+  }, [graph]);
+
+  const [glowPos, setGlowPos] = useState<{ x: number; y: number; color: string } | null>(null);
+
+  useEffect(() => {
+    if (hoveredContinentId === null || !hoveredContinentId || !sigmaRef.current) {
+      setGlowPos(null);
+      return;
+    }
+    const center = continentCenters.get(hoveredContinentId);
+    if (!center) {
+      setGlowPos(null);
+      return;
+    }
+    const vp = sigmaRef.current.graphToViewport({ x: center.x, y: center.y });
+    setGlowPos({ x: vp.x, y: vp.y, color: center.color });
+  }, [hoveredContinentId, continentCenters]);
+
   return (
     <div
       ref={containerRef}
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh' }}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', overflow: 'hidden' }}
       className="cursor-grab active:cursor-grabbing outline-none"
-    />
+    >
+      {/* Zero-overhead ambient CSS pseudo-glow highlighting continent location on hover */}
+      {glowPos && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${glowPos.x}px`,
+            top: `${glowPos.y}px`,
+            transform: 'translate(-50%, -50%)',
+            width: '280px',
+            height: '280px',
+            borderRadius: '50%',
+            background: `radial-gradient(circle, ${glowPos.color}44 0%, ${glowPos.color}15 45%, transparent 70%)`,
+            pointerEvents: 'none',
+            zIndex: 15,
+            transition: 'all 0.15s ease-out'
+          }}
+        />
+      )}
+    </div>
   );
 });

@@ -7,48 +7,45 @@ export interface CrossoverNeighbor {
   crossoverPercent: number;
 }
 
+export interface ArtistDetail {
+  subscribersFormatted?: string;
+  topTrack?: string;
+  previewUrl?: string;
+  spotifyUrl?: string;
+  deezerUrl?: string;
+  totalPlaylists?: number;
+  topCrossovers?: CrossoverNeighbor[];
+}
+
 export interface AtlasNode {
   id: string;
   label: string;
   x: number;
   y: number;
   size: number;
-  type?: string;
-  isHeadliner?: boolean;
   color: string;
   continentId: number;
   continentName: string;
-  communityId?: number;
-  communityName?: string;
-  popularity: number;
-  followers: number;
-  monthlyListeners?: number;
-  subscribers?: number;
-  subscribersFormatted?: string;
-  primaryGenre?: string;
+  primaryGenre: string;
+  topSubgenres: string[];
   image: string;
-  previewUrl: string;
+  subscribers: number;
+
+  // Optional fields populated when merged with ArtistDetail
+  subscribersFormatted?: string;
   topTrack?: string;
-  spotifyUrl: string;
-  genres: string[];
-  topSubgenres?: string[];
-  macroGenre: string;
-  sharedPlaylistsCount?: number;
-  topCrossovers: CrossoverNeighbor[];
+  previewUrl?: string;
+  spotifyUrl?: string;
+  deezerUrl?: string;
+  totalPlaylists?: number;
+  topCrossovers?: CrossoverNeighbor[];
 }
 
 export interface AtlasEdge {
-  id: string;
   source: string;
   target: string;
-  type?: string;
-  curvature?: number;
   weight: number;
   size: number;
-  color?: string;
-  rawSharedPlaylists: number;
-  crossoverSourcePercent: number;
-  crossoverTargetPercent: number;
   isBridge?: boolean;
 }
 
@@ -57,7 +54,6 @@ export interface Continent {
   name: string;
   color: string;
   artistCount: number;
-  artistIds: string[];
 }
 
 export interface AtlasMetadata {
@@ -74,3 +70,4 @@ export interface AtlasGraphBundle {
   nodes: AtlasNode[];
   edges: AtlasEdge[];
 }
+

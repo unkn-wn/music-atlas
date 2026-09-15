@@ -9,21 +9,57 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { AtlasNode } from './types/atlas';
 
 export const App: React.FC = () => {
-  const { data, graph, loading, error } = useGraphData();
+  const { data, graph, detailsMap, loading, error } = useGraphData();
   const canvasRef = useRef<AtlasCanvasHandle | null>(null);
 
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const [selectedContinentId, setSelectedContinentId] = useState<number | null>(null);
+  const [hoveredContinentId, setHoveredContinentId] = useState<number | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
 
-  // Selected artist object
+  // Fast node map for O(1) selection lookup
+  const nodeMap = useMemo(() => {
+    if (!data) return new Map<string, AtlasNode>();
+    const map = new Map<string, AtlasNode>();
+    for (const node of data.nodes) {
+      map.set(node.id, node);
+    }
+    return map;
+  }, [data]);
+
+  // Selected artist object with merged details
   const selectedArtist = useMemo(() => {
-    if (!data || !selectedArtistId) return null;
-    return data.nodes.find((n) => n.id === selectedArtistId) || null;
-  }, [data, selectedArtistId]);
+    if (!selectedArtistId) return null;
+    const base = nodeMap.get(selectedArtistId);
+    if (!base) return null;
+    const details = detailsMap ? detailsMap[selectedArtistId] : undefined;
+    if (!details) {
+      return {
+        ...base,
+        spotifyUrl: `https://open.spotify.com/search/${encodeURIComponent(base.label)}`
+      };
+    }
+    return {
+      ...base,
+      ...details,
+      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(base.label)}`
+    };
+  }, [nodeMap, selectedArtistId, detailsMap]);
+
+  // Active audio artist merged with details if available
+  const mergedAudioArtist = useMemo(() => {
+    if (!activeAudioArtist) return null;
+    const details = detailsMap ? detailsMap[activeAudioArtist.id] : undefined;
+    if (!details) return activeAudioArtist;
+    return {
+      ...activeAudioArtist,
+      ...details,
+      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(activeAudioArtist.label)}`
+    };
+  }, [activeAudioArtist, detailsMap]);
 
   // Drawer artist bound strictly to deliberate selection
   const drawerArtist = selectedArtist;
@@ -108,10 +144,11 @@ export const App: React.FC = () => {
         selectedNodeId={selectedArtistId}
         onSelectNode={handleSelectArtist}
         selectedContinentId={selectedContinentId}
+        hoveredContinentId={hoveredContinentId}
       />
 
       {/* Sleek Floating Top Navigation Island */}
-      <header className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between gap-4 pointer-events-none">
+      <header className="absolute top-4 left-4 right-4 z-50 flex items-center justify-between gap-4 pointer-events-none">
         {/* Brand Logo & Stats */}
         <div className="glass-panel px-3.5 py-2 flex items-center gap-2.5 shadow-xl pointer-events-auto shrink-0">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-emerald-500 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20">
@@ -142,6 +179,8 @@ export const App: React.FC = () => {
             continents={data.continents}
             selectedContinentId={selectedContinentId}
             onSelectContinent={setSelectedContinentId}
+            hoveredContinentId={hoveredContinentId}
+            onHoverContinent={setHoveredContinentId}
           />
 
           <button
@@ -207,7 +246,7 @@ export const App: React.FC = () => {
           className="pointer-events-none px-4 w-full max-w-2xl flex justify-center"
         >
           <AudioPlayerBar
-            currentArtist={activeAudioArtist}
+            currentArtist={mergedAudioArtist}
             isPlaying={isPlayingAudio}
             onTogglePlay={() => setIsPlayingAudio(!isPlayingAudio)}
           />

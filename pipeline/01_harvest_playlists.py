@@ -78,9 +78,9 @@ def normalize_artist_id(name: str, channel_id: Optional[str] = None) -> str:
 
 def is_system_or_algorithmic_playlist(title: str, author_name: str, author_id: str, browse_id: str) -> bool:
     """Rejects algorithmic, auto-generated, system, or 'Sound of' playlists."""
-    t_clean = title.lower().strip()
-    a_clean = author_name.lower().strip()
-    b_clean = browse_id.strip()
+    t_clean = (title or "").lower().strip()
+    a_clean = (author_name or "").lower().strip()
+    b_clean = (browse_id or "").strip()
 
     # Algorithmic shelf mixes start with RDCLAK
     if b_clean.startswith("RDCLAK") or "rdclak" in b_clean.lower():
@@ -106,8 +106,8 @@ def analyze_uploader_channels(raw_tracks: List[Dict]) -> Set[str]:
     channel_prefixes = defaultdict(set)
     for t in raw_tracks:
         artists_list = t.get("artists") or []
-        channel_name = artists_list[0].get("name", "").strip().lower() if artists_list else ""
-        title = t.get("title", "")
+        channel_name = artists_list[0].get("name", "").strip().lower() if artists_list and isinstance(artists_list[0], dict) else ""
+        title = t.get("title") or ""
         if " - " in title and channel_name:
             prefix = title.split(" - ")[0].strip().lower()
             if prefix and prefix != channel_name:
@@ -132,8 +132,8 @@ def extract_track_artist(track: Dict, uploader_channels: Set[str]) -> Tuple[str,
     clean_ch = primary_channel_name.lower().strip()
     if clean_ch in uploader_channels and " - " in title:
         prefix = title.split(" - ")[0].strip()
-        # Clean prefix from numbering like '01. Artist'
-        prefix = re.sub(r"^\d+[\.\s\-_]+", "", prefix).strip()
+        # Clean prefix from numbering like '01. Artist' or '01 - Artist'
+        prefix = re.sub(r"^\d+[\.\-_–—]+\s*", "", prefix).strip()
         if len(prefix) > 1:
             return sanitize_artist_name(prefix), None
 
@@ -238,6 +238,7 @@ def main():
     parser.add_argument("--limit-genres", type=int, default=None, help="Limit number of genres to crawl")
     parser.add_argument("--target-playlists", type=int, default=20, help="Target qualifying playlists per genre (default: 20)")
     parser.add_argument("--tier1-limit", type=int, default=12, help="Max playlists from direct search (default: 12)")
+    parser.add_argument("--max-anchors", type=int, default=8, help="Max anchor artists for Tier 2 recommendation discovery (default: 8)")
     parser.add_argument("--rate-limit", type=float, default=3.0, help="Max requests per second for YTM (default: 3.0)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
     args = parser.parse_args()
@@ -277,6 +278,17 @@ def main():
             occ_map[a_name][g] = c
 
     existing_playlist_ids = {p["id"] for p in playlists}
+    existing_genre_counts = Counter(p.get("genre") for p in playlists)
+    existing_genre_tracks = defaultdict(list)
+    for p in playlists:
+        g = p.get("genre")
+        if g:
+            for t in p.get("tracks", []):
+                if t.get("videoId"):
+                    existing_genre_tracks[g].append(t)
+
+    # A genre is only completed if it meets or exceeds the current target_playlists
+    completed_genres = {g for g in completed_genres if existing_genre_counts[g] >= args.target_playlists}
     completed_genre_list = list(completed_genres)
 
     yt = YTMusic()
@@ -358,68 +370,75 @@ def main():
 
     for g_info in genre_pbar:
         genre = g_info["genre"]
-        if genre in completed_genres:
+        existing_count = existing_genre_counts[genre]
+        if existing_count >= args.target_playlists:
+            if genre not in completed_genres:
+                completed_genres.add(genre)
+                completed_genre_list.append(genre)
             continue
 
-        genre_pbar.set_postfix({"genre": genre[:16], "total_pl": len(playlists)})
-        accepted_for_genre = 0
-        direct_tracks_for_anchors = []
+        genre_pbar.set_postfix({"genre": genre[:16], "total_pl": len(playlists), "genre_pl": existing_count})
+        accepted_for_genre = existing_count
+        direct_tracks_for_anchors = list(existing_genre_tracks[genre])
 
         # =====================================================================
         # TIER 1: Direct Community Search ("{genre} playlist" -> fallback bare)
         # =====================================================================
-        primary_query = f"{genre} playlist"
-        direct_candidates = []
-        seen_cand_ids = set()
+        if accepted_for_genre < args.tier1_limit:
+            primary_query = f"{genre} playlist"
+            direct_candidates = []
+            seen_cand_ids = set()
 
-        for q in [primary_query, genre]:
-            if len(direct_candidates) >= 15:
-                break
-            for retry in range(2):
-                try:
-                    pace_request()
-                    results = yt.search(q, filter="community_playlists", limit=20)
-                    for item in results or []:
-                        bid = item.get("browseId")
-                        if bid and bid not in seen_cand_ids and bid not in existing_playlist_ids:
-                            direct_candidates.append(item)
-                            seen_cand_ids.add(bid)
+            for q in [primary_query, genre]:
+                if len(direct_candidates) >= 15:
                     break
-                except Exception:
-                    time.sleep(1.0)
+                for retry in range(2):
+                    try:
+                        pace_request()
+                        results = yt.search(q, filter="community_playlists", limit=20)
+                        for item in results or []:
+                            bid = item.get("browseId")
+                            if bid and bid not in seen_cand_ids and bid not in existing_playlist_ids:
+                                direct_candidates.append(item)
+                                seen_cand_ids.add(bid)
+                        break
+                    except Exception:
+                        time.sleep(1.0)
 
-        for cand in direct_candidates:
-            if accepted_for_genre >= args.tier1_limit:
-                break
+            for cand in direct_candidates:
+                if accepted_for_genre >= args.tier1_limit or accepted_for_genre >= args.target_playlists:
+                    break
 
-            bid = cand.get("browseId")
-            if not bid or bid in existing_playlist_ids:
-                continue
+                bid = cand.get("browseId")
+                if not bid or bid in existing_playlist_ids:
+                    continue
 
-            author = cand.get("author") or {}
-            author_name = author.get("name", "") if isinstance(author, dict) else str(author)
-            author_id = author.get("id") or author_name if isinstance(author, dict) else author_name
-            if not author_id:
-                author_id = f"anon_{bid[:8]}"
+                author = cand.get("author") or {}
+                author_name = author.get("name", "") if isinstance(author, dict) else str(author)
+                author_id = author.get("id") or author_name if isinstance(author, dict) else author_name
+                if not author_id:
+                    author_id = f"anon_{bid[:8]}"
 
-            if seen_authors.get(author_id, 0) >= 2:
-                continue
+                if seen_authors.get(author_id, 0) >= 2:
+                    continue
 
-            pl_data = fetch_playlist_safely(bid)
-            if not pl_data:
-                continue
+                pl_data = fetch_playlist_safely(bid)
+                if not pl_data:
+                    continue
 
-            valid_pl = process_and_validate_playlist(pl_data, bid, genre, author_name, author_id)
-            if valid_pl:
-                seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
-                existing_playlist_ids.add(bid)
-                playlists.append(valid_pl)
-                accepted_for_genre += 1
+                valid_pl = process_and_validate_playlist(pl_data, bid, genre, author_name, author_id)
+                if valid_pl:
+                    seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
+                    existing_playlist_ids.add(bid)
+                    playlists.append(valid_pl)
+                    accepted_for_genre += 1
+                    existing_genre_counts[genre] += 1
 
-                for t in valid_pl["tracks"]:
-                    occ_map[t["artist_name"]][genre] += 1
-                    if t.get("videoId"):
-                        direct_tracks_for_anchors.append(t)
+                    for t in valid_pl["tracks"]:
+                        occ_map[t["artist_name"]][genre] += 1
+                        if t.get("videoId"):
+                            direct_tracks_for_anchors.append(t)
+                            existing_genre_tracks[genre].append(t)
 
         # =====================================================================
         # TIER 2: Collaborative Expansion via Song Recommendations
@@ -427,7 +446,10 @@ def main():
         needed_tier2 = args.target_playlists - accepted_for_genre
         if needed_tier2 > 0 and direct_tracks_for_anchors:
             # 1. Consensus Frequency Ranking
-            track_counts = Counter((t["videoId"], t["artist_name"], t["title"], t["is_qualified"]) for t in direct_tracks_for_anchors)
+            track_counts = Counter(
+                (t.get("videoId", ""), t.get("artist_name", ""), t.get("title", ""), t.get("is_qualified", False))
+                for t in direct_tracks_for_anchors
+            )
 
             # 2. Select Diverse, Catalog-Qualified Anchors (1 Track per Artist)
             anchors = []
@@ -439,17 +461,17 @@ def main():
                 if qualified and art_low not in seen_anchor_artists and len(art_low) > 1:
                     anchors.append({"videoId": vid, "artist": art, "title": title})
                     seen_anchor_artists.add(art_low)
-                    if len(anchors) >= 6:
+                    if len(anchors) >= args.max_anchors:
                         break
 
             # Fallback pass if needed
-            if len(anchors) < 4:
+            if len(anchors) < args.max_anchors:
                 for (vid, art, title, qualified), count in track_counts.most_common():
                     art_low = art.lower().strip()
                     if art_low not in seen_anchor_artists and len(art_low) > 1:
                         anchors.append({"videoId": vid, "artist": art, "title": title})
                         seen_anchor_artists.add(art_low)
-                        if len(anchors) >= 6:
+                        if len(anchors) >= args.max_anchors:
                             break
 
             # 3. Query Recommendations for Anchors
@@ -499,9 +521,12 @@ def main():
                             existing_playlist_ids.add(r_bid)
                             playlists.append(r_valid_pl)
                             accepted_for_genre += 1
+                            existing_genre_counts[genre] += 1
 
                             for t in r_valid_pl["tracks"]:
                                 occ_map[t["artist_name"]][genre] += 1
+                                if t.get("videoId"):
+                                    existing_genre_tracks[genre].append(t)
                 except Exception:
                     continue
 

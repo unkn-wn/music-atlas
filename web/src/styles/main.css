@@ -131,6 +131,9 @@ html, body, #root {
 .max-w-2xl { max-width: 42rem; }
 .max-w-lg { max-width: 32rem; }
 .max-w-\[130px\] { max-width: 130px; }
+.max-w-\[280px\] { max-width: 280px; }
+.max-w-\[360px\] { max-width: 360px; }
+.w-\[480px\] { width: 480px; }
 .min-w-0 { min-width: 0; }
 .shrink-0 { flex-shrink: 0; }
 
@@ -153,7 +156,14 @@ html, body, #root {
 .h-1\.5 { height: 0.375rem; }
 .h-\[calc\(100vh-6rem\)\] { height: calc(100vh - 6rem); }
 .max-h-96 { max-height: 24rem; }
+.max-h-80 { max-height: 20rem; }
+.max-h-64 { max-height: 16rem; }
 .max-h-36 { max-height: 9rem; }
+.overflow-y-auto { overflow-y: auto; }
+.overflow-x-hidden { overflow-x: hidden; }
+.overflow-hidden { overflow: hidden; }
+.w-96 { width: 24rem; }
+.w-80 { width: 20rem; }
 
 .gap-1 { gap: 0.25rem; }
 .gap-1\.5 { gap: 0.375rem; }
@@ -229,6 +239,9 @@ html, body, #root {
 .bg-white\/10 { background-color: rgba(255, 255, 255, 0.1); }
 .bg-white\/15 { background-color: rgba(255, 255, 255, 0.15); }
 .bg-white\/20 { background-color: rgba(255, 255, 255, 0.2); }
+.hover\:bg-white\/10:hover { background-color: rgba(255, 255, 255, 0.1); }
+.hover\:bg-white\/15:hover { background-color: rgba(255, 255, 255, 0.15); }
+.hover\:bg-white\/20:hover { background-color: rgba(255, 255, 255, 0.2); }
 .bg-black\/40 { background-color: rgba(0, 0, 0, 0.4); }
 .bg-black\/60 { background-color: rgba(0, 0, 0, 0.6); }
 .bg-black\/90 { background-color: rgba(0, 0, 0, 0.9); }
@@ -248,6 +261,8 @@ html, body, #root {
 .bg-gradient-to-r { background-image: linear-gradient(to right, #10b981, #38bdf8); }
 
 .text-white { color: #ffffff; }
+.hover\:text-white:hover { color: #ffffff; }
+.hover\:text-emerald-300:hover { color: #6ee7b7; }
 .text-black { color: #000000; }
 .text-slate-100 { color: #f1f5f9; }
 .text-slate-300 { color: #cbd5e1; }

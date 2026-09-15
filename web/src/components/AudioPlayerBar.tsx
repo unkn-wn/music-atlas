@@ -198,9 +198,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           <div className="text-[11px] text-slate-400 truncate flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentArtist.color }} />
             <span className="truncate">
-              {resolvedTitle || currentArtist.topTrack
-                ? `${currentArtist.label}${currentArtist.primaryGenre ? ` • ${currentArtist.primaryGenre}` : ''}`
-                : (currentArtist.primaryGenre || currentArtist.macroGenre || 'Audio Preview')}
+              {currentArtist.label}
             </span>
           </div>
         </div>

@@ -2,6 +2,12 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { X, Play, Pause, ExternalLink, Users, Disc3, ArrowRight } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
+// Accent styling constants for artist drawer elements
+const DEFAULT_ACCENT_COLOR = '#10b981';
+const SUBGENRE_BADGE_BG_PCT = 25;
+const SUBGENRE_BADGE_BORDER_PCT = 75;
+const PROGRESS_BAR_WHITE_PCT = 35;
+
 interface ArtistDrawerProps {
   artist: AtlasNode | null;
   onClose: () => void;
@@ -21,6 +27,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 }) => {
   if (!artist) return null;
 
+  const accentColor = artist.color || DEFAULT_ACCENT_COLOR;
   const [loadedArtistId, setLoadedArtistId] = useState<string | null>(null);
   const isImageLoaded = loadedArtistId === artist.id;
 
@@ -38,18 +45,18 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
   const subscriberDisplay = useMemo(() => {
     if (artist.subscribersFormatted) return artist.subscribersFormatted;
-    const subs = artist.subscribers ?? artist.followers ?? artist.monthlyListeners ?? 0;
+    const subs = artist.subscribers ?? 0;
     if (subs >= 1_000_000) return `${(subs / 1_000_000).toFixed(1)}M`;
     if (subs >= 1_000) return `${(subs / 1_000).toFixed(1)}K`;
     return subs.toLocaleString();
-  }, [artist.subscribersFormatted, artist.subscribers, artist.followers, artist.monthlyListeners]);
+  }, [artist.subscribersFormatted, artist.subscribers]);
 
   const subgenres = useMemo(() => {
-    const list = (artist.topSubgenres && artist.topSubgenres.length > 0)
-      ? artist.topSubgenres
-      : (artist.genres || []);
-    return list.filter((g) => g && g.toLowerCase() !== 'eclectic' && g.toLowerCase() !== 'other');
-  }, [artist.topSubgenres, artist.genres]);
+    const list = artist.topSubgenres || [];
+    return list.filter(
+      (g) => g && !['other', 'artist', 'unknown', 'eclectic'].includes(g.trim().toLowerCase())
+    );
+  }, [artist.topSubgenres]);
 
   const hasPreview = Boolean(artist.id || artist.label);
 
@@ -106,11 +113,17 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 0 24px rgba(16, 185, 129, 0.15)'
+                boxShadow: `0 0 24px color-mix(in srgb, ${accentColor} 15%, transparent)`
               }}
               className="animate-pulse"
             >
-              <Disc3 className="w-9 h-9 text-emerald-400/80 animate-spin" style={{ animationDuration: '2.5s' }} />
+              <Disc3
+                className="w-9 h-9 animate-spin"
+                style={{
+                  color: `color-mix(in srgb, ${accentColor} 80%, transparent)`,
+                  animationDuration: '2.5s'
+                }}
+              />
             </div>
             <div
               style={{
@@ -191,10 +204,21 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             if (hasPreview) onTogglePreview(artist);
           }}
           disabled={!hasPreview}
-          style={{ position: 'absolute', bottom: '0.75rem', right: '1rem', zIndex: 10 }}
+          style={{
+            position: 'absolute',
+            bottom: '0.75rem',
+            right: '1rem',
+            zIndex: 10,
+            ...(hasPreview
+              ? {
+                  backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                  // borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                }
+              : {})
+          }}
           className={`w-12 h-12 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center shrink-0 ${
             hasPreview
-              ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
+              ? "hover:brightness-110 text-black active:scale-95 cursor-pointer"
               : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
           }`}
           title={
@@ -207,9 +231,9 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         >
           <div className="w-5 h-5 flex items-center justify-center shrink-0">
             {isCurrentPlaying ? (
-              <Pause className="w-5 h-5 fill-current shrink-0" />
+              <Pause className="w-5 h-5 fill-current shrink-0" color='white' fill='white' />
             ) : (
-              <Play className="w-5 h-5 fill-current shrink-0" />
+              <Play className="w-5 h-5 fill-current shrink-0" color='white' fill='white' />
             )}
           </div>
         </button>
@@ -219,32 +243,26 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           <h2 className="text-xl font-bold text-white tracking-tight truncate drop-shadow-md">
             {artist.label}
           </h2>
-          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ backgroundColor: artist.color }}
-              />
-              <span className="text-xs font-semibold text-slate-200">
-                {artist.primaryGenre || 'Artist'}
-              </span>
-            </div>
-            {subgenres.length > 0 && (
-              <>
-                <span className="text-slate-500 text-xs">•</span>
+          {(subgenres.length > 0) && (
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              {subgenres.length > 0 && (
                 <div className="flex items-center gap-1 flex-wrap">
                   {subgenres.slice(0, 3).map((g, idx) => (
                     <span
                       key={idx}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                      style={{
+                        backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BG_PCT}%, transparent)`,
+                        borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                      }}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200"
                     >
                       {g}
                     </span>
                   ))}
                 </div>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -265,7 +283,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         <div>
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <Disc3 className="w-3.5 h-3.5 text-emerald-400" />
+              <Disc3 className="w-3.5 h-3.5" style={{ color: accentColor }} />
               <span className="tracking-wide uppercase">TOP SHARED PLAYLISTS ({displayedNeighbors.length})</span>
             </div>
           </div>
@@ -288,7 +306,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                           {c.neighborName}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1 text-[11px] font-mono text-emerald-400 font-bold shrink-0">
+                      <div
+                        className="flex items-center gap-1 text-[11px] font-mono font-bold shrink-0"
+                        style={{ color: accentColor }}
+                      >
                         <span>{c.sharedPlaylists}</span>
                         <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
                       </div>
@@ -297,8 +318,11 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     {/* Relative Shared Curation Progress Bar */}
                     <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
                       <div
-                        className="bg-gradient-to-r from-emerald-500 to-cyan-400 h-full rounded-full"
-                        style={{ width: `${barPercent}%` }}
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${barPercent}%`,
+                          background: `linear-gradient(to right, ${accentColor}, color-mix(in srgb, ${accentColor}, white ${PROGRESS_BAR_WHITE_PCT}%))`
+                        }}
                       />
                     </div>
                   </button>
@@ -328,7 +352,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         {/* Action Button: Open in Spotify */}
         <div className="mt-auto pt-2">
           <a
-            href={artist.spotifyUrl}
+            href={artist.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(artist.label)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-[#1DB954]/20 hover:bg-[#1DB954]/30 border border-[#1DB954]/40 text-[#1DB954] text-xs font-bold transition-all shadow-sm"

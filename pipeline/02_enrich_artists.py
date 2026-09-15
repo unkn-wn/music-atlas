@@ -31,7 +31,7 @@ import unicodedata
 import argparse
 import threading
 from collections import Counter, defaultdict
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 import httpx
 from tqdm import tqdm
 
@@ -96,29 +96,30 @@ def deterministic_match(target_name: str, candidates: List[Dict[str, Any]]) -> T
     # Tier 1: Canonical Normalized Exact Match
     tier1 = [c for c in candidates if normalize_text(c.get("name", "")) == target_norm]
     if tier1:
-        best = max(tier1, key=lambda x: x.get("nb_fan", 0))
+        best = max(tier1, key=lambda x: (x.get("nb_fan") or 0))
         return True, best, "Tier 1 (Exact/Diacritic)"
 
     # Tier 2: Punctuation & Symbol Invariance (e.g. AC/DC, *NSYNC, Pink Sweat$)
     if len(target_alpha) >= 3:
         tier2 = [c for c in candidates if alphanumeric_key(c.get("name", "")) == target_alpha]
         if tier2:
-            best = max(tier2, key=lambda x: x.get("nb_fan", 0))
+            best = max(tier2, key=lambda x: (x.get("nb_fan") or 0))
             return True, best, "Tier 2 (Symbol/Punctuation)"
 
     # Tier 3: Leading Article Invariance ('The ' / 'A ')
     if len(target_no_the) >= 3:
         tier3 = [c for c in candidates if strip_article(c.get("name", "")) == target_no_the]
         if tier3:
-            best = max(tier3, key=lambda x: x.get("nb_fan", 0))
+            best = max(tier3, key=lambda x: (x.get("nb_fan") or 0))
             return True, best, "Tier 3 (Article Invariance)"
 
     return False, None, "REJECTED"
 
 # --- Popularity & Sizing Helpers ---
 
-def format_fans(fans: int) -> str:
+def format_fans(fans: Optional[int]) -> str:
     """Formats fan integer into human-readable compact string ('264K', '50.2M')."""
+    fans = fans or 0
     if fans >= 1_000_000:
         val = fans / 1_000_000
         return f"{val:.1f}M" if val < 10 else f"{round(val)}M"
@@ -127,8 +128,9 @@ def format_fans(fans: int) -> str:
         return f"{val:.1f}K" if val < 10 else f"{round(val)}K"
     return str(fans)
 
-def calculate_log_popularity(fans: int) -> int:
+def calculate_log_popularity(fans: Optional[int]) -> int:
     """Logarithmic popularity scaled to verified followers/fans (1 to 100)."""
+    fans = fans or 0
     if fans <= 0:
         return 5
     log_s = math.log10(max(1, fans))
@@ -153,14 +155,32 @@ def save_json_cache(fpath: str, data: Dict[str, Any]):
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(temp, fpath)
 
+# --- Distinctive Track Content Word Extractor ---
+
+STOPWORDS = {
+    'the', 'and', 'for', 'you', 'with', 'that', 'this', 'from', 'all', 'your',
+    'what', 'don', 'can', 'out', 'one', 'let', 'get', 'like', 'just', 'not',
+    'are', 'was', 'have', 'had', 'has', 'her', 'his', 'him', 'who', 'how',
+    'where', 'when', 'why', 'which', 'about', 'into', 'over', 'after', 'beneath',
+    'under', 'above', 'remix', 'mix', 'feat', 'ft', 'version', 'edit', 'radio',
+    'live', 'acoustic', 'original', 'deluxe', 'remaster', 'remastered', 'instrumental',
+    'song', 'music', 'video', 'official', 'audio', 'club', 'intro', 'outro'
+}
+
+def extract_content_words(title: str) -> Set[str]:
+    """Extracts distinctive content tokens (len >= 3) from a track title, ignoring common noise words."""
+    t_clean = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).lower()
+    words = re.findall(r'[a-zA-Z]{3,}', t_clean)
+    return {w for w in words if w not in STOPWORDS}
+
 # --- Pure Deezer API Client ---
 
 class DeezerArbiter:
     """
     Direct client for Deezer API:
     - 10 req/second public rate limit (paced at ~8 req/s).
-    - Zero daily quotas or 403 origin blocks.
-    - Resolves 1000px portraits, 30s previews, macro-genres, and fan counts.
+    - Resolves 1000px portraits, 30s previews, fan counts, and top tracks.
+    - Implements Exact Match Immunity & Track-Overlap Disambiguation Guard.
     """
     def __init__(self):
         self.http = httpx.Client(headers={"User-Agent": "MusicAtlas/2.0"}, timeout=8.0)
@@ -176,41 +196,133 @@ class DeezerArbiter:
                 time.sleep(self.min_interval - elapsed)
             self.last_call = time.time()
 
-    def verify_and_enrich(self, target_name: str, max_retries: int = 3) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def get_candidate_tracks(self, aid: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """Fetches top tracks for an artist candidate (limit=10 for rich vocabulary matching)."""
+        for retry in range(3):
+            try:
+                self._pace()
+                r_top = self.http.get(f"https://api.deezer.com/artist/{aid}/top?limit={limit}")
+                if r_top.status_code == 200:
+                    data = r_top.json()
+                    if "error" in data:
+                        err = data.get("error", {})
+                        if err.get("code") == 4 or "quota" in err.get("message", "").lower():
+                            time.sleep(1.5 * (retry + 1))
+                            continue
+                        return []
+                    return data.get("data", [])
+            except Exception:
+                pass
+        return []
+
+    def verify_and_enrich(
+        self, 
+        target_name: str, 
+        playlist_words: Optional[Set[str]] = None, 
+        max_retries: int = 3
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
-        Queries Deezer search with limit=25, applies 4-Tier Matcher,
-        and enriches with top track preview, macro-genre, and fan count.
+        Queries Deezer search with limit=25, applies Exact Match Immunity
+        and Track-Overlap Disambiguation Guard, and enriches with preview, fans, and image.
         """
+        target_norm = normalize_text(target_name)
+        target_clean_words = set(playlist_words) if playlist_words else set()
+        target_clean_words.discard(target_norm)
+
         for attempt in range(max_retries):
             try:
                 self._pace()
                 r = self.http.get("https://api.deezer.com/search/artist", params={"q": target_name, "limit": 25})
                 if r.status_code == 200:
-                    items = r.json().get("data", [])
-                    is_match, matched, _ = deterministic_match(target_name, items)
-                    if not is_match or not matched:
+                    data = r.json()
+                    if "error" in data:
+                        err = data.get("error", {})
+                        if err.get("code") == 4 or "quota" in err.get("message", "").lower():
+                            time.sleep(2.0 * (attempt + 1))
+                            continue
                         return False, None
 
-                    aid = matched.get("id")
-                    canonical_name = matched.get("name", target_name)
-                    fans = matched.get("nb_fan", 0)
-                    portrait_url = matched.get("picture_xl") or matched.get("picture_medium", "")
+                    items = data.get("data", [])
+                    is_exact, exact_cand, _ = deterministic_match(target_name, items)
 
-                    # 1. Fetch top track for genuine 30s MP3 audio preview
+                    matched_cand = None
+                    selected_tracks = []
+
+                    # 1. Exact Match Immunity
+                    if is_exact and exact_cand:
+                        matched_id = exact_cand.get("id")
+                        selected_tracks = self.get_candidate_tracks(matched_id, limit=10)
+                        c_words = set()
+                        for t in selected_tracks:
+                            c_words.update(extract_content_words(t.get("title", "")))
+                        c_words.discard(target_norm)
+
+                        overlap = target_clean_words.intersection(c_words)
+                        # Exact candidate accepted if it matches playlist tracks, or if no playlist words exist to contest
+                        if len(overlap) >= 1 or not target_clean_words:
+                            matched_cand = exact_cand
+
+                    # 2. Disambiguation Guard: triggers if exact match had 0 track overlap or no exact match exists
+                    if not matched_cand:
+                        competing = []
+                        for c in items:
+                            c_fans = (c.get("nb_fan") or 0)
+                            if c_fans <= 0:
+                                continue
+                            c_norm = normalize_text(c.get("name", ""))
+                            tokens = set(re.findall(r'[a-zA-Z0-9]+', c_norm))
+                            if target_norm in tokens or c_norm.endswith(target_norm):
+                                competing.append(c)
+
+                        competing.sort(key=lambda x: (x.get("nb_fan") or 0), reverse=True)
+
+                        best_candidate = None
+                        best_overlap_count = 0
+                        best_tracks = []
+
+                        for c in competing[:5]:
+                            c_aid = c.get("id")
+                            if is_exact and exact_cand and c_aid == exact_cand.get("id"):
+                                continue
+                            c_tracks = self.get_candidate_tracks(c_aid, limit=10)
+                            c_words = set()
+                            for t in c_tracks:
+                                c_words.update(extract_content_words(t.get("title", "")))
+                            c_words.discard(target_norm)
+                            overlap = target_clean_words.intersection(c_words)
+                            count = len(overlap)
+
+                            # Strictly enforce the >= 3 distinctive content words safety floor
+                            if count >= 3 and count > best_overlap_count:
+                                best_candidate = c
+                                best_overlap_count = count
+                                best_tracks = c_tracks
+
+                        if best_candidate:
+                            matched_cand = best_candidate
+                            selected_tracks = best_tracks
+                        elif is_exact and exact_cand:
+                            # Safe fallback: preserve exact match candidate
+                            matched_cand = exact_cand
+
+                    if not matched_cand:
+                        return False, None
+
+                    aid = matched_cand.get("id")
+                    canonical_name = matched_cand.get("name", target_name)
+                    fans = (matched_cand.get("nb_fan") or 0)
+                    portrait_url = matched_cand.get("picture_xl") or matched_cand.get("picture_medium", "")
+
+                    if not selected_tracks:
+                        selected_tracks = self.get_candidate_tracks(aid, limit=10)
+
                     preview_url = ""
                     top_track = ""
-                    try:
-                        self._pace()
-                        r_top = self.http.get(f"https://api.deezer.com/artist/{aid}/top?limit=3")
-                        if r_top.status_code == 200:
-                            tracks = r_top.json().get("data", [])
-                            for t in tracks:
-                                if t.get("preview"):
-                                    preview_url = t.get("preview")
-                                    top_track = t.get("title", "")
-                                    break
-                    except Exception:
-                        pass
+                    for t in selected_tracks:
+                        if t.get("preview"):
+                            preview_url = t.get("preview")
+                            top_track = t.get("title", "")
+                            break
 
                     return True, {
                         "id": f"dz_{aid}",
@@ -220,7 +332,7 @@ class DeezerArbiter:
                         "image": portrait_url,
                         "previewUrl": preview_url,
                         "topTrack": top_track,
-                        "deezer_url": matched.get("link", f"https://www.deezer.com/artist/{aid}")
+                        "deezer_url": matched_cand.get("link", f"https://www.deezer.com/artist/{aid}")
                     }
                 else:
                     time.sleep(0.5)
@@ -232,15 +344,12 @@ class DeezerArbiter:
 # --- IDF Top Subgenre Calculator ---
 
 def compute_idf_top_subgenres(
-    artist_name: str,
-    occ_map: Dict[str, Counter],
+    artist_genres: Counter,
     doc_freq: Dict[str, int],
     total_docs: int,
     top_k: int = 3
 ) -> List[str]:
     """Computes IDF-weighted specificity scores to select the artist's Top 3 distinct subgenres."""
-    clean_name = artist_name.lower().strip()
-    artist_genres = occ_map.get(clean_name, Counter())
     if not artist_genres:
         return []
 
@@ -248,8 +357,7 @@ def compute_idf_top_subgenres(
     for g, tf in artist_genres.items():
         df = doc_freq.get(g, 1)
         idf = math.log((1.0 + total_docs) / (1.0 + df)) + 1.0
-        score = tf * idf
-        scores.append((score, g))
+        scores.append((tf * idf, g))
 
     scores.sort(key=lambda x: x[0], reverse=True)
     return [g.title() for _, g in scores[:top_k]]
@@ -278,20 +386,27 @@ def main():
     with open(OCCURRENCES_FILE, "r", encoding="utf-8") as f:
         occurrences = json.load(f)
 
-    # 1. Count independent qualifying playlist appearances per artist
+    # 1. Count independent qualifying playlist appearances per artist and index track words
     artist_playlist_count = Counter()
     artist_canonical_case = {}
+    artist_track_words = defaultdict(set)
+    artist_playlists_set = defaultdict(set)
 
-    for pl in playlists:
+    for pl_idx, pl in enumerate(playlists):
         seen_in_pl = set()
+        pid = pl.get("id") or str(pl_idx)
         for t in pl.get("tracks", []):
             name = t.get("artist_name", "").strip()
+            title = t.get("title", "").strip()
             if not name:
                 continue
             art_key = name.lower()
             if art_key not in seen_in_pl:
                 artist_playlist_count[art_key] += 1
                 seen_in_pl.add(art_key)
+                artist_playlists_set[art_key].add(pid)
+            if title:
+                artist_track_words[art_key].update(extract_content_words(title))
             if art_key not in artist_canonical_case or name[0].isupper():
                 artist_canonical_case[art_key] = name
 
@@ -321,6 +436,7 @@ def main():
 
     deezer = DeezerArbiter()
 
+    artist_meta_map: Dict[str, Dict[str, Any]] = {}
     verified_catalog = []
     surviving_artist_ids = []
 
@@ -331,26 +447,20 @@ def main():
         for art_key in pbar:
             display_name = artist_canonical_case.get(art_key, art_key)
             total_pl = artist_playlist_count[art_key]
+            words_for_artist = set(artist_track_words.get(art_key, set()))
+            words_for_artist.discard(art_key)
 
             cached_entry = cache.get(art_key) or cache.get(display_name.lower())
 
-            # Check if cached entry needs re-verification (e.g. prominent artist that got clipped by old limit=5)
-            needs_reverification = bool(
-                cached_entry and
-                cached_entry.get("verified") and
-                cached_entry.get("fans", 0) < 100 and
-                total_pl >= 20
-            )
-
-            if cached_entry and "verified" in cached_entry and not needs_reverification:
+            if cached_entry and "verified" in cached_entry:
                 if not cached_entry["verified"]:
                     continue  # Pruned non-artist
                 meta = cached_entry
             elif args.offline:
                 continue
             else:
-                # Deterministic Deezer Verification & Enrichment
-                is_verified, dz_meta = deezer.verify_and_enrich(display_name)
+                # Deterministic Deezer Verification & Enrichment with Disambiguation Guard
+                is_verified, dz_meta = deezer.verify_and_enrich(display_name, playlist_words=words_for_artist)
 
                 if not is_verified or not dz_meta:
                     cache[art_key] = {"verified": False}
@@ -362,23 +472,12 @@ def main():
                 preview_url = dz_meta.get("previewUrl", "")
                 top_track = dz_meta.get("topTrack", "")
                 portrait_url = dz_meta.get("image", "")
-                macro_genre = dz_meta.get("macro_genre", "")
                 deezer_url = dz_meta.get("deezer_url", "")
-
-                # Top 3 IDF Subgenres from EveryNoise provenance
-                top_subgenres = compute_idf_top_subgenres(display_name, normalized_occ, doc_freq, total_docs)
-                if not top_subgenres and canonical_name != display_name:
-                    top_subgenres = compute_idf_top_subgenres(canonical_name, normalized_occ, doc_freq, total_docs)
-
-                # Primary macro-genre assignment: Deezer macro genre -> #1 empirical subgenre -> 'Other'
-                primary_genre = macro_genre or (top_subgenres[0] if top_subgenres else "Other")
 
                 meta = {
                     "verified": True,
                     "id": artist_id,
                     "name": canonical_name,
-                    "primaryGenre": primary_genre,
-                    "topSubgenres": top_subgenres,
                     "previewUrl": preview_url,
                     "topTrack": top_track,
                     "image": portrait_url,
@@ -390,32 +489,7 @@ def main():
 
                 cache[art_key] = meta
 
-            # Build final catalog item
-            artist_id = meta["id"]
-            fans = meta.get("fans", 0)
-            canonical_name = meta["name"]
-
-            catalog_entry = {
-                "id": artist_id,
-                "name": canonical_name,
-                "scraped_name": art_key,
-                "subscribers": fans,
-                "formattedSubscribers": format_fans(fans),
-                "subscribersFormatted": format_fans(fans),
-                "popularity": calculate_log_popularity(fans),
-                "primaryGenre": meta.get("primaryGenre", "Other"),
-                "topSubgenres": meta.get("topSubgenres", []),
-                "previewUrl": meta.get("previewUrl", ""),
-                "topTrack": meta.get("topTrack", ""),
-                "image": meta.get("image", ""),
-                "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{canonical_name}"),
-                "deezerUrl": meta.get("deezerUrl", ""),
-                "totalPlaylists": total_pl,
-                "sharedPlaylistsCount": total_pl
-            }
-
-            verified_catalog.append(catalog_entry)
-            surviving_artist_ids.append(artist_id)
+            artist_meta_map[art_key] = meta
 
             checkpoint_counter += 1
             if checkpoint_counter % 25 == 0 and not args.offline:
@@ -425,6 +499,66 @@ def main():
         deezer.http.close()
         if not args.offline:
             save_json_cache(CACHE_FILE, cache)
+
+    # 4. Canonical De-duplication & Merging by Deezer ID (Guardrail 4)
+    # Groups all scraped variants (e.g. 'bach', 'j.s. bach', 'johann sebastian bach')
+    # under their single canonical Deezer ID with exact mathematical playlist union.
+    canonical_artist_records: Dict[str, Dict[str, Any]] = {}
+    canonical_playlists_union: Dict[str, Set[str]] = defaultdict(set)
+    canonical_scraped_names: Dict[str, List[str]] = defaultdict(list)
+    canonical_genre_occurrences: Dict[str, Counter] = defaultdict(Counter)
+
+    for art_key, meta in artist_meta_map.items():
+        aid = meta["id"]
+        canonical_playlists_union[aid].update(artist_playlists_set[art_key])
+        if art_key not in canonical_scraped_names[aid]:
+            canonical_scraped_names[aid].append(art_key)
+        for g, cnt in normalized_occ[art_key].items():
+            canonical_genre_occurrences[aid][g] += cnt
+
+        if aid not in canonical_artist_records:
+            canonical_artist_records[aid] = meta
+        else:
+            if meta.get("fans", 0) > canonical_artist_records[aid].get("fans", 0):
+                canonical_artist_records[aid] = meta
+
+    for aid, meta in canonical_artist_records.items():
+        total_pl = len(canonical_playlists_union[aid])
+        fans = meta.get("fans", 0)
+        canonical_name = meta.get("name", "")
+        scraped_list = canonical_scraped_names[aid]
+        primary_scraped = scraped_list[0] if scraped_list else canonical_name.lower()
+
+        # Top 3 IDF Subgenres computed from merged occurrences across all variants
+        top_subgenres = compute_idf_top_subgenres(canonical_genre_occurrences[aid], doc_freq, total_docs)
+
+        if not top_subgenres and "topSubgenres" in meta:
+            top_subgenres = meta["topSubgenres"]
+
+        primary_genre = meta.get("primaryGenre") or (top_subgenres[0] if top_subgenres else "Other")
+
+        catalog_entry = {
+            "id": aid,
+            "name": canonical_name,
+            "scraped_name": primary_scraped,
+            "scraped_names": scraped_list,
+            "subscribers": fans,
+            "formattedSubscribers": format_fans(fans),
+            "subscribersFormatted": format_fans(fans),
+            "popularity": calculate_log_popularity(fans),
+            "primaryGenre": primary_genre,
+            "topSubgenres": top_subgenres,
+            "previewUrl": meta.get("previewUrl", ""),
+            "topTrack": meta.get("topTrack", ""),
+            "image": meta.get("image", ""),
+            "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{canonical_name}"),
+            "deezerUrl": meta.get("deezerUrl", ""),
+            "totalPlaylists": total_pl,
+            "sharedPlaylistsCount": total_pl
+        }
+
+        verified_catalog.append(catalog_entry)
+        surviving_artist_ids.append(aid)
 
     # Save output artifacts
     with open(CATALOG_FILE, "w", encoding="utf-8") as f:

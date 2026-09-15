@@ -153,9 +153,10 @@ def main():
     sorted_by_subs = sorted(catalog_map.values(), key=lambda a: a.get("subscribers", 0), reverse=True)
     headliner_ids = {a["id"] for a in sorted_by_subs[:400] if a.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in a.get("image", "")}
 
-    # 3. Assemble Nodes
+    # 3. Assemble Nodes and Decoupled Detail Dictionary
     nodes = []
-    for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes", unit="node"):
+    details = {}
+    for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes & Details", unit="node"):
         pos = coords.get(a_id, {"x": 0.0, "y": 0.0})
         comm_info = artist_continent_map.get(a_id, {
             "continentId": 1,
@@ -166,14 +167,9 @@ def main():
         })
 
         subs = max(1000, meta.get("subscribers", 1000))
-        # Log10-Power scaling (Option A: gamma=2.6): 1.1px for <1k niche up to 14.5px for superstars, with 200k at ~3.8px
         ratio = (math.log10(subs) - log_min) / log_diff
         ratio = max(0.0, min(1.0, ratio))
         node_size = round(1.1 + (ratio ** 2.6) * 13.4, 1)
-
-        is_headliner = a_id in headliner_ids
-        has_valid_image = bool(meta.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in meta.get("image", ""))
-        node_type = "image" if (is_headliner and has_valid_image) else "circle"
 
         # Apply Adaptive Connection Rule for topCrossovers (dynamic 6 to 20)
         c_i = meta.get("totalPlaylists") or meta.get("sharedPlaylistsCount") or len(raw_neighbors[a_id])
@@ -182,102 +178,89 @@ def main():
         nodes.append({
             "id": a_id,
             "label": meta["name"],
-            "x": pos["x"],
-            "y": pos["y"],
+            "x": round(pos["x"], 3),
+            "y": round(pos["y"], 3),
             "size": node_size,
-            "type": node_type,
-            "isHeadliner": is_headliner,
             "color": comm_info["color"],
             "continentId": comm_info["continentId"],
             "continentName": comm_info["continentName"],
-            "communityId": comm_info.get("communityId", comm_info["continentId"]),
-            "communityName": comm_info.get("communityName", comm_info["continentName"]),
-            "popularity": meta.get("popularity", 50),
-            "followers": subs,
-            "monthlyListeners": subs,
-            "subscribers": subs,
-            "subscribersFormatted": meta.get("subscribersFormatted") or meta.get("formattedSubscribers") or f"{subs:,}",
             "primaryGenre": meta.get("primaryGenre") or comm_info.get("primaryGenre", "Other"),
-            "macroGenre": comm_info.get("continentName", meta.get("primaryGenre", "Other")),
-            "genres": meta.get("topSubgenres", meta.get("genres", [])),
             "topSubgenres": meta.get("topSubgenres", []),
             "image": meta.get("image", ""),
-            "previewUrl": meta.get("previewUrl", ""),
+            "subscribers": subs
+        })
+
+        details[a_id] = {
+            "subscribersFormatted": meta.get("subscribersFormatted") or meta.get("formattedSubscribers") or f"{subs:,}",
             "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
+            "previewUrl": meta.get("previewUrl", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{meta['name']}"),
             "deezerUrl": meta.get("deezerUrl", ""),
             "totalPlaylists": c_i,
-            "sharedPlaylistsCount": c_i,
             "topCrossovers": adaptive_connections
-        })
+        }
 
-    # 4. Assemble Edges with Radial Bézier Inward Deflection (Spiderweb Effect)
+    # 4. Assemble High-Performance Straight Edges (Zero Bézier overhead)
     formatted_edges = []
-    for idx, e in enumerate(tqdm(edges, desc="Stage 5: Deflecting Edges", unit="edge")):
+    for e in tqdm(edges, desc="Stage 5: Assembling Straight Edges", unit="edge"):
         src = e["source"]
         dst = e["target"]
         if src not in catalog_map or dst not in catalog_map:
             continue
 
-        src_color = artist_continent_map.get(src, {}).get("color", "#94a3b8")
-        pos_src = coords.get(src, {"x": 0.0, "y": 0.0})
-        pos_dst = coords.get(dst, {"x": 0.0, "y": 0.0})
-
-        x1, y1 = pos_src["x"], pos_src["y"]
-        x2, y2 = pos_dst["x"], pos_dst["y"]
-        dx, dy = x2 - x1, y2 - y1
-        L = math.sqrt(dx * dx + dy * dy) or 1.0
-
-        # Normal vector perpendicular to chord
-        nx, ny = -dy / L, dx / L
-        # Midpoint
-        mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-
-        # Inward radial deflection: dot product with midpoint
-        dot = mx * nx + my * ny
-        curvature = -0.14 if dot >= 0 else 0.14
-
         formatted_edges.append({
-            "id": f"e_{idx}",
             "source": src,
             "target": dst,
-            "type": "curve",
-            "curvature": round(curvature, 3),
-            "weight": e["weight"],
+            "weight": round(float(e["weight"]), 4),
             "size": max(0.08, round(e["weight"] * 0.9, 2)),
-            "color": src_color,
-            "rawSharedPlaylists": e["rawSharedPlaylists"],
-            "crossoverSourcePercent": e["crossoverSourcePercent"],
-            "crossoverTargetPercent": e["crossoverTargetPercent"],
             "isBridge": bool(e.get("isBridge", False))
         })
+
+    clean_continents = [
+        {
+            "id": c["id"],
+            "name": c["name"],
+            "color": c["color"],
+            "artistCount": c.get("artistCount", len(c.get("artistIds", [])))
+        }
+        for c in continents
+    ]
 
     bundle = {
         "metadata": {
             "generatedAt": datetime.now().isoformat(),
             "nodeCount": len(nodes),
             "edgeCount": len(formatted_edges),
-            "continentCount": len(continents),
+            "continentCount": len(clean_continents),
             "version": "2.0.0"
         },
-        "continents": continents,
+        "continents": clean_continents,
         "nodes": nodes,
         "edges": formatted_edges
     }
 
-    # Save to pipeline output
+    # Save atlas-graph.json (pipeline and web) minified
     out_pipeline = os.path.join(OUTPUT_DIR, "atlas-graph.json")
     with open(out_pipeline, "w", encoding="utf-8") as f:
-        json.dump(bundle, f, indent=2)
+        json.dump(bundle, f, separators=(',', ':'))
 
-    # Save to web/public/data/atlas-graph.json
     out_web = os.path.join(WEB_DATA_DIR, "atlas-graph.json")
     with open(out_web, "w", encoding="utf-8") as f:
-        json.dump(bundle, f, indent=2)
+        json.dump(bundle, f, separators=(',', ':'))
+
+    # Save atlas-details.json (pipeline and web) minified
+    details_pipeline = os.path.join(OUTPUT_DIR, "atlas-details.json")
+    with open(details_pipeline, "w", encoding="utf-8") as f:
+        json.dump(details, f, separators=(',', ':'))
+
+    details_web = os.path.join(WEB_DATA_DIR, "atlas-details.json")
+    with open(details_web, "w", encoding="utf-8") as f:
+        json.dump(details, f, separators=(',', ':'))
 
     print(f"\nStage 5 complete in {time.time() - start_time:.2f}s!")
-    print(f"Exported atlas bundle with {len(nodes)} nodes, {len(formatted_edges)} edges, {len(continents)} continents.")
+    print(f"Exported atlas bundle with {len(nodes)} nodes, {len(formatted_edges)} edges, {len(clean_continents)} continents.")
     print(f"Artifact location: {out_web} (Size: {os.path.getsize(out_web) / (1024 * 1024):.2f} MB)")
+    print(f"Details location: {details_web} (Size: {os.path.getsize(details_web) / (1024 * 1024):.2f} MB)")
     print("=" * 70)
 
 if __name__ == "__main__":

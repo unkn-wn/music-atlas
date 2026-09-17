@@ -1,7 +1,7 @@
 export interface CrossoverNeighbor {
   neighborId: string;
-  neighborName: string;
-  image: string;
+  neighborName?: string;
+  image?: string;
   cosineSimilarity: number;
   sharedPlaylists: number;
   crossoverPercent: number;

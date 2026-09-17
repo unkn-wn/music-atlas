@@ -9,7 +9,7 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { AtlasNode } from './types/atlas';
 
 export const App: React.FC = () => {
-  const { data, graph, detailsMap, loading, error } = useGraphData();
+  const { data, graph, detailsMap, loading, error, loadContinentDetails } = useGraphData();
   const canvasRef = useRef<AtlasCanvasHandle | null>(null);
 
   // UI States
@@ -30,34 +30,58 @@ export const App: React.FC = () => {
     return map;
   }, [data]);
 
-  // Selected artist object with merged details
+  // Fetch continent details on demand when an artist is selected
+  React.useEffect(() => {
+    if (!selectedArtistId) return;
+    const node = nodeMap.get(selectedArtistId);
+    if (node && node.continentId) {
+      loadContinentDetails(node.continentId);
+    }
+  }, [selectedArtistId, nodeMap, loadContinentDetails]);
+
+  // Fetch continent details on demand when an active audio preview starts
+  React.useEffect(() => {
+    if (!activeAudioArtist) return;
+    const node = nodeMap.get(activeAudioArtist.id);
+    if (node && node.continentId) {
+      loadContinentDetails(node.continentId);
+    }
+  }, [activeAudioArtist, nodeMap, loadContinentDetails]);
+
+  // Selected artist object with merged details & hydrated crossover metadata
   const selectedArtist = useMemo(() => {
     if (!selectedArtistId) return null;
     const base = nodeMap.get(selectedArtistId);
     if (!base) return null;
-    const details = detailsMap ? detailsMap[selectedArtistId] : undefined;
+    const details = detailsMap[selectedArtistId];
     if (!details) {
       return {
         ...base,
-        spotifyUrl: `https://open.spotify.com/search/${encodeURIComponent(base.label)}`
+        spotifyUrl: `https://open.spotify.com/search/${encodeURIComponent(base.label || '')}`
       };
     }
+    const resolvedCrossovers = details.topCrossovers?.map((c) => ({
+      ...c,
+      neighborName: nodeMap.get(c.neighborId)?.label || c.neighborName || c.neighborId,
+      image: nodeMap.get(c.neighborId)?.image || c.image || ''
+    }));
     return {
       ...base,
       ...details,
-      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(base.label)}`
+      topCrossovers: resolvedCrossovers,
+      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(base.label || '')}`
     };
   }, [nodeMap, selectedArtistId, detailsMap]);
 
   // Active audio artist merged with details if available
   const mergedAudioArtist = useMemo(() => {
     if (!activeAudioArtist) return null;
-    const details = detailsMap ? detailsMap[activeAudioArtist.id] : undefined;
+    const details = detailsMap[activeAudioArtist.id];
     if (!details) return activeAudioArtist;
     return {
       ...activeAudioArtist,
       ...details,
-      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(activeAudioArtist.label)}`
+      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(activeAudioArtist.label || '')}`
     };
   }, [activeAudioArtist, detailsMap]);
 
@@ -231,7 +255,7 @@ export const App: React.FC = () => {
             key={drawerArtist.id}
             artist={drawerArtist}
             onClose={() => setSelectedArtistId(null)}
-            onSelectNeighbor={handleSelectArtist}
+            onSelectNeighbor={(id) => handleSelectArtist(id, true)}
             isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === drawerArtist.id}
             onTogglePreview={handleTogglePreview}
             currentlyPlayingId={activeAudioArtist?.id || null}

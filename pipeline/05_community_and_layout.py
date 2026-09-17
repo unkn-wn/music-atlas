@@ -45,19 +45,24 @@ SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 COMMUNITIES_FILE = os.path.join(OUTPUT_DIR, "communities.json")
 LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 
-# Perceptually distinct, vibrant 64-continent palette
+# Perceptually distinct, vibrant 128-continent palette
 CONTINENT_PALETTE = [
-    "#10B981", "#EC4899", "#F59E0B", "#06B6D4", "#EF4444", "#8B5CF6",
-    "#EAB308", "#D97706", "#F43F5E", "#6366F1", "#14B8A6", "#3B82F6",
-    "#84CC16", "#A855F7", "#00E5FF", "#D946EF", "#FB923C", "#4ADE80",
-    "#38BDF8", "#C084FC", "#F87171", "#FACC15", "#2DD4BF", "#818CF8",
-    "#FB7185", "#A3E635", "#22D3EE", "#E879F9", "#F472B6", "#FDE047",
-    "#34D399", "#60A5FA", "#C4B5FD", "#FDA4AF", "#A7F3D0", "#FCD34D",
-    "#0284C7", "#059669", "#D97706", "#7C3AED", "#DB2777", "#DC2626",
-    "#65A30D", "#0D9488", "#2563EB", "#9333EA", "#C026D3", "#E11D48",
-    "#CA8A04", "#16A34A", "#0891B2", "#4F46E5", "#7E22CE", "#BE185D",
-    "#B91C1C", "#4D7C0F", "#0F766E", "#1D4ED8", "#6D28D9", "#A21CAF",
-    "#9F1239", "#A16207", "#15803D", "#0E7490"
+    "#10B981", "#06B6D4", "#14B8A6", "#2DD4BF", "#059669", "#0D9488", "#0891B2", "#15803D",
+    "#00E5FF", "#38BDF8", "#3B82F6", "#60A5FA", "#0284C7", "#2563EB", "#1D4ED8", "#0EA5E9",
+    "#6366F1", "#8B5CF6", "#A855F7", "#C084FC", "#818CF8", "#C4B5FD", "#7C3AED", "#9333EA",
+    "#4F46E5", "#7E22CE", "#6D28D9", "#4338CA", "#A21CAF", "#C026D3", "#D946EF", "#E879F9",
+    "#EC4899", "#F43F5E", "#F87171", "#FB7185", "#F472B6", "#FDA4AF", "#DB2777", "#DC2626",
+    "#E11D48", "#BE185D", "#B91C1C", "#9F1239", "#FF2A6D", "#FF6584", "#E02424", "#F05252",
+    "#F59E0B", "#EAB308", "#D97706", "#FB923C", "#FACC15", "#FDE047", "#FCD34D", "#CA8A04",
+    "#A16207", "#FF7A00", "#FFAA00", "#FFD600", "#F57C00", "#EF6C00", "#F97316", "#E65100",
+    "#84CC16", "#4ADE80", "#A3E635", "#34D399", "#A7F3D0", "#65A30D", "#16A34A", "#4D7C0F",
+    "#22C55E", "#166534", "#86EFAC", "#BBF7D0", "#48BB78", "#38A169", "#2F855A", "#276749",
+    "#EE33F4", "#F110F8", "#EC55F1", "#33F4B5", "#10F8AD", "#55F1BE", "#F47D33", "#F86910",
+    "#F19155", "#4533F4", "#2510F8", "#6355F1", "#59F433", "#3EF810", "#74F155", "#F43392",
+    "#F81082", "#F155A1", "#33CAF4", "#10C6F8", "#55CFF1", "#F4E533", "#F8E710", "#F1E555",
+    "#AD33F4", "#A310F8", "#B855F1", "#33F475", "#10F85F", "#55F18A", "#F43D33", "#F81C10",
+    "#F15D55", "#3362F4", "#1048F8", "#557AF1", "#9AF433", "#8CF810", "#A8F155", "#F433D2",
+    "#F810D0", "#F155D5", "#33F4DD", "#10F8DD", "#55F1DE", "#F4A533", "#F89910", "#F1B155"
 ]
 
 def format_genre_name(name: str) -> str:
@@ -268,14 +273,15 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & Archipelago Layout.")
     parser.add_argument("--num-iters", type=int, default=300, help="Vectorized physics iterations (default: 300)")
     parser.add_argument("--canvas-bound", type=float, default=3200.0, help="Canvas coordinate half-width (default: 3200.0)")
-    parser.add_argument("--target-continents", type=int, default=64, help="Target macro continents count (default: 64)")
+    parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count (default: 128)")
+    parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter (default: 2.8 for >=128, 1.6 for 64)")
     args = parser.parse_args()
 
     if not os.path.exists(EDGES_FILE) or not os.path.exists(CATALOG_FILE):
         raise FileNotFoundError("Missing Stage 4 inputs. Run earlier pipeline stages first.")
 
     print("=" * 70)
-    print(" STAGE 4C: 64 LOUVAIN CONTINENTS & GALAXY ARCHIPELAGO PHYSICS")
+    print(f" STAGE 4C: {args.target_continents} LOUVAIN CONTINENTS & GALAXY ARCHIPELAGO PHYSICS")
     print("=" * 70)
     start_time = time.time()
 
@@ -305,12 +311,15 @@ def main():
 
     print(f"Graph loaded with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
-    # 1. Topological Louvain Community Detection (Resolution 1.6 for 64 cohesive territories)
-    print("Detecting topological communities via Louvain modularity optimization (resolution=1.6)...")
-    raw_comms = [set(c) for c in nx.community.louvain_communities(G, weight="weight", resolution=1.6, seed=42)]
+    # 1. Topological Louvain Community Detection (Resolution 2.8 for >=128, 1.6 for 64)
+    target_res = args.resolution
+    if target_res is None:
+        target_res = 2.8 if args.target_continents >= 128 else 1.6
+    print(f"Detecting topological communities via Louvain modularity optimization (resolution={target_res})...")
+    raw_comms = [set(c) for c in nx.community.louvain_communities(G, weight="weight", resolution=target_res, seed=42)]
     print(f"Raw Louvain communities detected: {len(raw_comms)}")
 
-    # Iterative Agglomerative Merge: merge smallest communities until <= target_continents (64) and all >= 25 artists
+    # Iterative Agglomerative Merge: merge smallest communities until <= target_continents and all >= 25 artists
     communities = sorted(raw_comms, key=len, reverse=True)
 
     while len(communities) > args.target_continents or any(len(c) < 25 for c in communities):

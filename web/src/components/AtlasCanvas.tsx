@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useImperativeHandle, forwardRef, useState, us
 import Sigma from 'sigma';
 import Graph from 'graphology';
 import { NodeCircleProgram, EdgeLineProgram } from 'sigma/rendering';
+import { hexToRgba } from '../utils/color';
 
 export interface AtlasCanvasHandle {
   zoomIn: () => void;
@@ -70,83 +71,46 @@ function getAvatarImage(rawUrl: string | undefined | null, onLoaded?: () => void
   return null;
 }
 
-const rgbaCache = new Map<string, string>();
+// Invariant text metric cache to eliminate hot-loop context.measureText calls
+const textWidthCache = new Map<string, number>();
 
-function hexToRgba(hex: string, alpha: number): string {
-  const clampedAlpha = Math.max(0, Math.min(1, alpha));
-  const key = `${hex}_${clampedAlpha.toFixed(2)}`;
-  const cached = rgbaCache.get(key);
-  if (cached) return cached;
-
-  let r = 148, g = 163, b = 184;
-  if (hex && hex.charAt(0) === '#') {
-    let clean = hex.slice(1);
-    if (clean.length === 3) {
-      clean = clean[0] + clean[0] + clean[1] + clean[1] + clean[2] + clean[2];
-    }
-    if (clean.length >= 6) {
-      const parseHexChannel = (s: string, fallback: number) => {
-        const v = parseInt(s, 16);
-        return Number.isNaN(v) ? fallback : v;
-      };
-      r = parseHexChannel(clean.substring(0, 2), 148);
-      g = parseHexChannel(clean.substring(2, 4), 163);
-      b = parseHexChannel(clean.substring(4, 6), 184);
-    }
+function getLabelWidth(context: CanvasRenderingContext2D, label: string): number {
+  let w = textWidthCache.get(label);
+  if (w === undefined) {
+    w = context.measureText(label).width;
+    textWidthCache.set(label, w);
   }
-
-  // WebGL premultiplied alpha
-  const pr = Math.round(r * clampedAlpha);
-  const pg = Math.round(g * clampedAlpha);
-  const pb = Math.round(b * clampedAlpha);
-  const result = `rgba(${pr}, ${pg}, ${pb}, ${clampedAlpha})`;
-  rgbaCache.set(key, result);
-  return result;
+  return w;
 }
 
-
-interface LabelBox {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-}
-
+// Zero-allocation spatial collision grid with 32-bit packed integer keys and flat coordinates
 class ScreenLabelCollisionGrid {
   private cellSize = 75;
-  private grid = new Map<string, LabelBox[]>();
+  private grid = new Map<number, number[]>();
 
   clear() {
     this.grid.clear();
   }
 
-  private getKeys(box: LabelBox): string[] {
-    const minC = Math.floor(box.minX / this.cellSize);
-    const maxC = Math.floor(box.maxX / this.cellSize);
-    const minR = Math.floor(box.minY / this.cellSize);
-    const maxR = Math.floor(box.maxY / this.cellSize);
-    const keys: string[] = [];
+  collides(minX: number, maxX: number, minY: number, maxY: number): boolean {
+    const minC = Math.floor(minX / this.cellSize);
+    const maxC = Math.floor(maxX / this.cellSize);
+    const minR = Math.floor(minY / this.cellSize);
+    const maxR = Math.floor(maxY / this.cellSize);
     for (let c = minC; c <= maxC; c++) {
       for (let r = minR; r <= maxR; r++) {
-        keys.push(`${c},${r}`);
-      }
-    }
-    return keys;
-  }
-
-  collides(box: LabelBox): boolean {
-    const keys = this.getKeys(box);
-    for (const k of keys) {
-      const cell = this.grid.get(k);
-      if (cell) {
-        for (const existing of cell) {
-          if (
-            box.minX < existing.maxX &&
-            box.maxX > existing.minX &&
-            box.minY < existing.maxY &&
-            box.maxY > existing.minY
-          ) {
-            return true;
+        const key = ((c + 32768) << 16) | ((r + 32768) & 0xffff);
+        const cell = this.grid.get(key);
+        if (cell) {
+          for (let i = 0; i < cell.length; i += 4) {
+            if (
+              minX < cell[i + 1] &&
+              maxX > cell[i] &&
+              minY < cell[i + 3] &&
+              maxY > cell[i + 2]
+            ) {
+              return true;
+            }
           }
         }
       }
@@ -154,15 +118,21 @@ class ScreenLabelCollisionGrid {
     return false;
   }
 
-  insert(box: LabelBox) {
-    const keys = this.getKeys(box);
-    for (const k of keys) {
-      let cell = this.grid.get(k);
-      if (!cell) {
-        cell = [];
-        this.grid.set(k, cell);
+  insert(minX: number, maxX: number, minY: number, maxY: number) {
+    const minC = Math.floor(minX / this.cellSize);
+    const maxC = Math.floor(maxX / this.cellSize);
+    const minR = Math.floor(minY / this.cellSize);
+    const maxR = Math.floor(maxY / this.cellSize);
+    for (let c = minC; c <= maxC; c++) {
+      for (let r = minR; r <= maxR; r++) {
+        const key = ((c + 32768) << 16) | ((r + 32768) & 0xffff);
+        let cell = this.grid.get(key);
+        if (!cell) {
+          cell = [];
+          this.grid.set(key, cell);
+        }
+        cell.push(minX, maxX, minY, maxY);
       }
-      cell.push(box);
     }
   }
 }
@@ -229,12 +199,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         }
 
         // Reserve circular node footprint in the collision grid so text never covers nearby discs
-        collisionGridRef.current.insert({
-          minX: x - radius - 3,
-          maxX: x + radius + 3,
-          minY: y - radius - 3,
-          maxY: y + radius + 3
-        });
+        collisionGridRef.current.insert(x - radius - 3, x + radius + 3, y - radius - 3, y + radius + 3);
 
         // Artist name label text beneath node with strict Screen-Space Collision Detection
         if (data.label) {
@@ -249,25 +214,22 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           const font = settings.labelFont || 'Plus Jakarta Sans, sans-serif';
           const weight = settings.labelWeight || '700';
           context.font = `${weight} ${size}px ${font}`;
-
-          const textWidth = context.measureText(data.label).width;
+          const textWidth = getLabelWidth(context, data.label);
           const yOffset = y + radius + 8;
           const padX = 8;
           const padY = 4;
 
-          const labelBox: LabelBox = {
-            minX: x - textWidth / 2 - padX,
-            maxX: x + textWidth / 2 + padX,
-            minY: yOffset - padY,
-            maxY: yOffset + size + padY
-          };
+          const labelMinX = x - textWidth / 2 - padX;
+          const labelMaxX = x + textWidth / 2 + padX;
+          const labelMinY = yOffset - padY;
+          const labelMaxY = yOffset + size + padY;
 
           // Selected node and direct connections ALWAYS render their labels!
-          if (!data.isSelected && !data.isNeighbor && collisionGridRef.current.collides(labelBox)) {
+          if (!data.isSelected && !data.isNeighbor && collisionGridRef.current.collides(labelMinX, labelMaxX, labelMinY, labelMaxY)) {
             return; // Cleanly suppress colliding background label text
           }
 
-          collisionGridRef.current.insert(labelBox);
+          collisionGridRef.current.insert(labelMinX, labelMaxX, labelMinY, labelMaxY);
           renderedLabelCountRef.current += 1;
 
           // 1:1 Avatar Rendering: Render avatar strictly when its label is rendered!
@@ -507,60 +469,17 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     }
   }));
 
-  // Build fast edge lookup map with constant styling (zero-allocation per frame, zero zoom thresholds)
-  const edgeLookupRef = useRef<Map<string, {
-    src: string;
-    dst: string;
-    srcCont: number;
-    dstCont: number;
-    size: number;
-    weight: number;
-    isBridge: boolean;
-    color: string;
-  }>>(new Map());
-
-  useEffect(() => {
-    if (!graph) return;
-    const map = new Map<string, {
-      src: string;
-      dst: string;
-      srcCont: number;
-      dstCont: number;
-      size: number;
-      weight: number;
-      isBridge: boolean;
-      color: string;
-    }>();
-
-    graph.forEachEdge((edge, attrs, source, target) => {
-      const srcColor = (graph.getNodeAttribute(source, 'color') as string) || (attrs.color as string) || '#94a3b8';
-      const weight = (attrs.weight as number) || 0.5;
-
-      map.set(edge, {
-        src: source,
-        dst: target,
-        srcCont: (graph.getNodeAttribute(source, 'continentId') as number) || 0,
-        dstCont: (graph.getNodeAttribute(target, 'continentId') as number) || 0,
-        size: (attrs.size as number) || 1,
-        weight,
-        isBridge: Boolean(attrs.isBridge),
-        color: hexToRgba(srcColor, 0.12)
-      });
-    });
-    edgeLookupRef.current = map;
-  }, [graph]);
-
   // Update Dynamic Reducers (Edge thresholding, adaptive crossover focus mode, and continent filtering)
   useEffect(() => {
     if (!sigmaRef.current || !graph) return;
 
     const sigma = sigmaRef.current;
-    const edgeMap = edgeLookupRef.current;
+    const hasValidSelection = Boolean(selectedNodeId && graph.hasNode(selectedNodeId));
 
     // Resolve all active neighbor IDs from graph edges
     const neighborIds = new Set<string>();
     let selectedArtistColor = '#38bdf8';
-    if (selectedNodeId && graph.hasNode(selectedNodeId)) {
+    if (hasValidSelection && selectedNodeId) {
       const nodeAttrs = graph.getNodeAttributes(selectedNodeId);
       selectedArtistColor = (nodeAttrs.color as string) || '#38bdf8';
       graph.forEachNeighbor(selectedNodeId, (nbr) => {
@@ -568,24 +487,26 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       });
     }
 
-    // Dynamic Edge Reducer (constant, zero zoom thresholds)
-    sigma.setSetting('edgeReducer', (edge, data) => {
-      const cached = edgeMap.get(edge);
-      const src = cached ? cached.src : graph.source(edge);
-      const dst = cached ? cached.dst : graph.target(edge);
+    // Dynamic Edge Reducer (constant, zero zoom thresholds, zero separate map lookups)
+    const edgeReducer = (edge: string, data: any) => {
+      const src = graph.source(edge);
+      const dst = graph.target(edge);
+      const originalSize = (data.originalSize as number) || (data.size as number) || 1;
+      const srcCont = (data.srcCont as number) || 0;
+      const dstCont = (data.dstCont as number) || 0;
 
       // 1. When an artist is selected: illuminate only incident edges, hide all background edges to eliminate lag and white glare
-      if (selectedNodeId) {
+      if (hasValidSelection) {
         const isIncidentToSelected = src === selectedNodeId || dst === selectedNodeId;
 
         if (isIncidentToSelected) {
-          const isCrossContinent = Boolean(cached && cached.srcCont !== cached.dstCont);
-          const isBridge = cached ? cached.isBridge : Boolean(data.isBridge);
+          const isCrossContinent = srcCont !== dstCont;
+          const isBridge = Boolean(data.isBridge);
           const isDistantCrossover = isBridge || isCrossContinent;
 
           data.hidden = false;
           data.color = isDistantCrossover ? hexToRgba(selectedArtistColor, 0.5) : selectedArtistColor;
-          data.size = isDistantCrossover ? 0.5 : Math.max(0.7, (cached ? cached.size : 1) * 0.9);
+          data.size = isDistantCrossover ? 0.5 : Math.max(0.7, originalSize * 0.9);
           data.zIndex = isDistantCrossover ? 6 : 10;
           return data;
         }
@@ -595,24 +516,22 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       }
 
       // 2. Filter by Continent if one is selected
-      if (selectedContinentId !== null && cached) {
-        if (cached.srcCont !== selectedContinentId && cached.dstCont !== selectedContinentId) {
+      if (selectedContinentId !== null) {
+        if (srcCont !== selectedContinentId && dstCont !== selectedContinentId) {
           data.hidden = true;
           return data;
         }
       }
 
       // 3. Always-visible translucent filaments with constant styling (no zoom thresholds)
-      const edgeColor = cached ? cached.color : 'rgba(148, 163, 184, 0.10)';
-
       data.hidden = false;
-      data.color = edgeColor;
-      data.size = Math.max(0.12, (cached ? cached.size : 1) * 0.12);
+      data.color = (data.defaultColor as string) || 'rgba(148, 163, 184, 0.10)';
+      data.size = Math.max(0.12, originalSize * 0.12);
       return data;
-    });
+    };
 
     // Dynamic Node Reducer (constant, zero zoom thresholds, zero buffer thrashing)
-    sigma.setSetting('nodeReducer', (node, data) => {
+    const nodeReducer = (node: string, data: any) => {
       const continentId = data.continentId as number;
       const originalColor = data.originalColor || data.color;
       const originalLabel = (data.originalLabel || data.label || '') as string;
@@ -627,7 +546,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       data.image = originalImage;
 
       // 1. When an artist is selected: focal artist and connected peers display image and label
-      if (selectedNodeId) {
+      if (hasValidSelection) {
         if (node === selectedNodeId) {
           data.size = size;
           data.color = originalColor;
@@ -682,8 +601,9 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       data.isNeighbor = false;
       data.zIndex = invertedZ;
       return data;
-    });
+    };
 
+    sigma.setSettings({ edgeReducer, nodeReducer });
     sigma.refresh();
   }, [graph, selectedNodeId, selectedContinentId]);
 
@@ -726,11 +646,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
   }, [hoveredContinentId, continentCenters]);
 
   return (
-    <div
-      ref={containerRef}
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', overflow: 'hidden' }}
-      className="cursor-grab active:cursor-grabbing outline-none"
-    >
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh', overflow: 'hidden' }}>
+      <div
+        ref={containerRef}
+        style={{ width: '100%', height: '100%' }}
+        className="cursor-grab active:cursor-grabbing outline-none"
+      />
       {/* Zero-overhead ambient CSS pseudo-glow highlighting continent location on hover */}
       {glowPos && (
         <div
@@ -742,7 +663,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
             width: '280px',
             height: '280px',
             borderRadius: '50%',
-            background: `radial-gradient(circle, ${glowPos.color}44 0%, ${glowPos.color}15 45%, transparent 70%)`,
+            background: `radial-gradient(circle, ${hexToRgba(glowPos.color, 0.27)} 0%, ${hexToRgba(glowPos.color, 0.08)} 45%, transparent 70%)`,
             pointerEvents: 'none',
             zIndex: 15,
             transition: 'all 0.15s ease-out'

@@ -149,13 +149,16 @@ def main():
     log_max = math.log10(max_subs)
     log_diff = (log_max - log_min) or 1.0
 
-    # Top 400 global headliners by subscribers
-    sorted_by_subs = sorted(catalog_map.values(), key=lambda a: a.get("subscribers", 0), reverse=True)
-    headliner_ids = {a["id"] for a in sorted_by_subs[:400] if a.get("image") and "d41d8cd98f00b204e9800998ecf8427e" not in a.get("image", "")}
+    OUTPUT_DETAILS_DIR = os.path.join(OUTPUT_DIR, "details")
+    WEB_DETAILS_DIR = os.path.join(WEB_DATA_DIR, "details")
+    os.makedirs(OUTPUT_DETAILS_DIR, exist_ok=True)
+    os.makedirs(WEB_DETAILS_DIR, exist_ok=True)
 
     # 3. Assemble Nodes and Decoupled Detail Dictionary
     nodes = []
     details = {}
+    active_edge_pairs = set()
+
     for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes & Details", unit="node"):
         pos = coords.get(a_id, {"x": 0.0, "y": 0.0})
         comm_info = artist_continent_map.get(a_id, {
@@ -174,6 +177,20 @@ def main():
         # Apply Adaptive Connection Rule for topCrossovers (dynamic 6 to 20)
         c_i = meta.get("totalPlaylists") or meta.get("sharedPlaylistsCount") or len(raw_neighbors[a_id])
         adaptive_connections = compute_adaptive_neighbors(a_id, raw_neighbors[a_id], c_i)
+
+        for n in adaptive_connections:
+            active_edge_pairs.add(tuple(sorted([a_id, n["neighborId"]])))
+
+        # Compact crossovers: strip redundant neighborName and image (rehydrated dynamically by web client via nodeMap)
+        compact_connections = [
+            {
+                "neighborId": n["neighborId"],
+                "cosineSimilarity": n["cosineSimilarity"],
+                "sharedPlaylists": n["sharedPlaylists"],
+                "crossoverPercent": n["crossoverPercent"]
+            }
+            for n in adaptive_connections
+        ]
 
         nodes.append({
             "id": a_id,
@@ -194,27 +211,37 @@ def main():
             "subscribersFormatted": meta.get("subscribersFormatted") or meta.get("formattedSubscribers") or f"{subs:,}",
             "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
             "previewUrl": meta.get("previewUrl", ""),
-            "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{meta['name']}"),
             "deezerUrl": meta.get("deezerUrl", ""),
             "totalPlaylists": c_i,
-            "topCrossovers": adaptive_connections
+            "topCrossovers": compact_connections
         }
 
-    # 4. Assemble High-Performance Straight Edges (Zero Bézier overhead)
+    # Always preserve all bridge edges connecting satellite clusters
+    for e in edges:
+        if e.get("isBridge"):
+            active_edge_pairs.add(tuple(sorted([e["source"], e["target"]])))
+
+    # 4. Assemble High-Performance Straight Edges (Strictly Active Pairs + Bridges)
     formatted_edges = []
     for e in tqdm(edges, desc="Stage 5: Assembling Straight Edges", unit="edge"):
         src = e["source"]
         dst = e["target"]
         if src not in catalog_map or dst not in catalog_map:
             continue
+        pair = tuple(sorted([src, dst]))
+        if pair not in active_edge_pairs:
+            continue
 
-        formatted_edges.append({
+        edge_dict = {
             "source": src,
             "target": dst,
             "weight": round(float(e["weight"]), 4),
-            "size": max(0.08, round(e["weight"] * 0.9, 2)),
-            "isBridge": bool(e.get("isBridge", False))
-        })
+            "size": max(0.08, round(e["weight"] * 0.9, 2))
+        }
+        if e.get("isBridge"):
+            edge_dict["isBridge"] = True
+
+        formatted_edges.append(edge_dict)
 
     clean_continents = [
         {
@@ -248,19 +275,42 @@ def main():
     with open(out_web, "w", encoding="utf-8") as f:
         json.dump(bundle, f, separators=(',', ':'))
 
-    # Save atlas-details.json (pipeline and web) minified
-    details_pipeline = os.path.join(OUTPUT_DIR, "atlas-details.json")
-    with open(details_pipeline, "w", encoding="utf-8") as f:
-        json.dump(details, f, separators=(',', ':'))
+    # Purge old continent detail files before writing new ones
+    for target_dir in [WEB_DETAILS_DIR, OUTPUT_DETAILS_DIR]:
+        if os.path.exists(target_dir):
+            for fname in os.listdir(target_dir):
+                if fname.startswith("continent_") and fname.endswith(".json"):
+                    try:
+                        os.remove(os.path.join(target_dir, fname))
+                    except Exception:
+                        pass
 
-    details_web = os.path.join(WEB_DATA_DIR, "atlas-details.json")
-    with open(details_web, "w", encoding="utf-8") as f:
-        json.dump(details, f, separators=(',', ':'))
+    # Save chunked continent details to pipeline and web
+    continent_details = defaultdict(dict)
+    for a_id, d in details.items():
+        c_id = artist_continent_map.get(a_id, {}).get("continentId", 1)
+        continent_details[c_id][a_id] = d
+
+    for c_id, c_data in continent_details.items():
+        out_f = os.path.join(WEB_DETAILS_DIR, f"continent_{c_id}.json")
+        with open(out_f, "w", encoding="utf-8") as f:
+            json.dump(c_data, f, separators=(',', ':'))
+        out_p = os.path.join(OUTPUT_DETAILS_DIR, f"continent_{c_id}.json")
+        with open(out_p, "w", encoding="utf-8") as f:
+            json.dump(c_data, f, separators=(',', ':'))
+
+    # Remove deprecated legacy atlas-details.json per AGENTS.md zero backwards compatibility rule
+    old_details_web = os.path.join(WEB_DATA_DIR, "atlas-details.json")
+    if os.path.exists(old_details_web):
+        os.remove(old_details_web)
+    old_details_pipe = os.path.join(OUTPUT_DIR, "atlas-details.json")
+    if os.path.exists(old_details_pipe):
+        os.remove(old_details_pipe)
 
     print(f"\nStage 5 complete in {time.time() - start_time:.2f}s!")
     print(f"Exported atlas bundle with {len(nodes)} nodes, {len(formatted_edges)} edges, {len(clean_continents)} continents.")
     print(f"Artifact location: {out_web} (Size: {os.path.getsize(out_web) / (1024 * 1024):.2f} MB)")
-    print(f"Details location: {details_web} (Size: {os.path.getsize(details_web) / (1024 * 1024):.2f} MB)")
+    print(f"Chunked details into {len(continent_details)} continent files in {WEB_DETAILS_DIR}")
     print("=" * 70)
 
 if __name__ == "__main__":

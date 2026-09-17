@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--from-step", type=int, default=0, choices=range(0, 7), help="Start pipeline execution from specific step number (0-6)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh by clearing checkpoints and re-harvesting all genres")
     parser.add_argument("--clear-cache", action="store_true", help="Wipe intermediate output files in pipeline/output/ before running")
+    parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count in Stage 5 (default: 128)")
     args = parser.parse_args()
 
     OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
@@ -92,6 +93,8 @@ def main():
             cmd.extend(["--min-playlists", str(args.min_playlists)])
             if args.offline:
                 cmd.append("--offline")
+        elif step_idx == 5:
+            cmd.extend(["--target-continents", str(args.target_continents)])
 
         res = subprocess.run(cmd, cwd=PIPELINE_DIR)
 

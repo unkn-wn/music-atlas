@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--fresh", action="store_true", help="Start fresh by clearing checkpoints and re-harvesting all genres")
     parser.add_argument("--clear-cache", action="store_true", help="Wipe intermediate output files in pipeline/output/ before running")
     parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count in Stage 5 (default: 128)")
+    parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width in Stage 5 (default: 6400.0)")
     args = parser.parse_args()
 
     OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
@@ -94,7 +95,7 @@ def main():
             if args.offline:
                 cmd.append("--offline")
         elif step_idx == 5:
-            cmd.extend(["--target-continents", str(args.target_continents)])
+            cmd.extend(["--target-continents", str(args.target_continents), "--canvas-bound", str(args.canvas_bound)])
 
         res = subprocess.run(cmd, cwd=PIPELINE_DIR)
 

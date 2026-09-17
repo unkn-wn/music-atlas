@@ -178,29 +178,29 @@ def main():
         c_i = meta.get("totalPlaylists") or meta.get("sharedPlaylistsCount") or len(raw_neighbors[a_id])
         adaptive_connections = compute_adaptive_neighbors(a_id, raw_neighbors[a_id], c_i)
 
-        for n in adaptive_connections:
+        # In the visual WebGL graph, cap each artist to at most 6 edges to eliminate panning lag
+        for n in adaptive_connections[:6]:
             active_edge_pairs.add(tuple(sorted([a_id, n["neighborId"]])))
 
-        # Compact crossovers: strip redundant neighborName and image (rehydrated dynamically by web client via nodeMap)
+        # Compact crossovers: retain full adaptive connections (up to 20) for the UI drawer as 4-tuples [id, sim, shared, pct]
         compact_connections = [
-            {
-                "neighborId": n["neighborId"],
-                "cosineSimilarity": n["cosineSimilarity"],
-                "sharedPlaylists": n["sharedPlaylists"],
-                "crossoverPercent": n["crossoverPercent"]
-            }
+            [
+                n["neighborId"],
+                round(float(n["cosineSimilarity"]), 4),
+                int(n["sharedPlaylists"]),
+                round(float(n["crossoverPercent"]), 1)
+            ]
             for n in adaptive_connections
         ]
 
         nodes.append({
             "id": a_id,
             "label": meta["name"],
-            "x": round(pos["x"], 3),
-            "y": round(pos["y"], 3),
+            "x": round(pos["x"], 1),
+            "y": round(pos["y"], 1),
             "size": node_size,
             "color": comm_info["color"],
             "continentId": comm_info["continentId"],
-            "continentName": comm_info["continentName"],
             "primaryGenre": meta.get("primaryGenre") or comm_info.get("primaryGenre", "Other"),
             "topSubgenres": meta.get("topSubgenres", []),
             "image": meta.get("image", ""),

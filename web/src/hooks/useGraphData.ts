@@ -33,7 +33,28 @@ export function useGraphData() {
     const fetchPromise = fetch(`/data/details/continent_${continentId}.json`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`Status ${res.status}`);
-        const chunk: Record<string, ArtistDetail> = await res.json();
+        const rawChunk: Record<string, any> = await res.json();
+        const chunk: Record<string, ArtistDetail> = {};
+
+        for (const [artistId, detail] of Object.entries(rawChunk)) {
+          chunk[artistId] = {
+            ...detail,
+            topCrossovers: Array.isArray(detail.topCrossovers)
+              ? detail.topCrossovers.map((c: any) => {
+                  if (Array.isArray(c)) {
+                    return {
+                      neighborId: c[0],
+                      cosineSimilarity: c[1],
+                      sharedPlaylists: c[2],
+                      crossoverPercent: c[3]
+                    };
+                  }
+                  return c;
+                })
+              : []
+          };
+        }
+
         continentCache.current.set(continentId, chunk);
         if (isMountedRef.current) {
           setDetailsMap((prev) => ({ ...prev, ...chunk }));
@@ -66,11 +87,20 @@ export function useGraphData() {
         }
         const bundle: AtlasGraphBundle = await resp.json();
 
+        // Build quick lookup for continent names
+        const continentNames = new Map<number, string>();
+        if (bundle.continents) {
+          bundle.continents.forEach((c) => continentNames.set(c.id, c.name));
+        }
+
         // Instantiate in-memory Graphology graph
         const g = new Graph({ type: 'undirected', multi: false });
 
         // Add nodes: all nodes rendered as circles in WebGL
         bundle.nodes.forEach((node) => {
+          if (!node.continentName) {
+            node.continentName = continentNames.get(node.continentId) || '';
+          }
           g.addNode(node.id, {
             ...node,
             type: 'circle',

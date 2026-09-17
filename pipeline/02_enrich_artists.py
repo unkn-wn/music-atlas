@@ -45,6 +45,7 @@ PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
 OCCURRENCES_FILE = os.path.join(OUTPUT_DIR, "artist_subgenre_occurrences.json")
 CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
@@ -341,26 +342,76 @@ class DeezerArbiter:
 
         return False, None
 
-# --- IDF Top Subgenre Calculator ---
+# --- Rank-Aware Top Subgenre Engine ---
 
-def compute_idf_top_subgenres(
+def format_genre_name(name: str) -> str:
+    """Formats genre and acronym strings cleanly for display."""
+    if not name:
+        return ""
+    name = name.strip()
+    acronym_map = {
+        "r&b": "R&B",
+        "ccm": "CCM",
+        "edm": "EDM",
+        "k-pop": "K-Pop",
+        "j-pop": "J-Pop",
+        "j-rock": "J-Rock",
+        "ost": "OST",
+        "uk": "UK",
+        "idm": "IDM",
+        "opm": "OPM",
+        "mpb": "MPB",
+        "nz": "NZ",
+        "v-pop": "V-Pop"
+    }
+    parts = name.split()
+    return " ".join(acronym_map.get(p.lower(), p.title()) for p in parts)
+
+def compute_rank_aware_top_subgenres(
     artist_genres: Counter,
-    doc_freq: Dict[str, int],
-    total_docs: int,
+    genre_ranks: Dict[str, int],
+    total_playlists: int,
     top_k: int = 3
 ) -> List[str]:
-    """Computes IDF-weighted specificity scores to select the artist's Top 3 distinct subgenres."""
+    """
+    Computes authentic, rank-aware, specificity-balanced top subgenres for an artist:
+    1. Anti-Fluke Noise Floor:
+       For artists appearing in >= 6 playlists, discard single-occurrence genres (cnt < 2)
+       to prevent accidental fluke crossover appearances from polluting their core identity.
+    2. Artist-Relative Dominance (Purity):
+       Share(A, g) = count(A, g) / sum(count(A, g'))
+    3. Foundational Rank Weighting (EveryNoise popularity rank):
+       W_rank(g) = 1.0 / (Rank(g) ** 0.5)
+    4. Deterministic Ranking:
+       Score(A, g) = (count ** 0.85) * (share ** 0.3) * W_rank(g)
+    """
     if not artist_genres:
         return []
 
-    scores = []
-    for g, tf in artist_genres.items():
-        df = doc_freq.get(g, 1)
-        idf = math.log((1.0 + total_docs) / (1.0 + df)) + 1.0
-        scores.append((tf * idf, g))
+    total_occurrences = sum(artist_genres.values())
+    if total_occurrences == 0:
+        return []
 
-    scores.sort(key=lambda x: x[0], reverse=True)
-    return [g.title() for _, g in scores[:top_k]]
+    candidates = {}
+    for g, cnt in artist_genres.items():
+        share = cnt / total_occurrences
+        if total_playlists >= 6 and cnt < 2:
+            continue
+        candidates[g] = (cnt, share)
+
+    if not candidates:
+        for g, cnt in artist_genres.items():
+            candidates[g] = (cnt, cnt / total_occurrences)
+
+    scored = []
+    for g, (cnt, share) in candidates.items():
+        rank = genre_ranks.get(g.lower().strip(), 3500)
+        w_rank = 1.0 / (rank ** 0.5)
+        score = (cnt ** 0.85) * (share ** 0.3) * w_rank
+        scored.append((score, cnt, g))
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [format_genre_name(g) for _, _, g in scored[:top_k]]
 
 # --- Main Execution ---
 
@@ -383,16 +434,17 @@ def main():
 
     with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
         playlists = json.load(f)
-    with open(OCCURRENCES_FILE, "r", encoding="utf-8") as f:
-        occurrences = json.load(f)
 
-    # 1. Count independent qualifying playlist appearances per artist and index track words
+    # 1. Count independent qualifying playlist appearances per artist, index track words, and index subgenre occurrences
     artist_playlist_count = Counter()
     artist_canonical_case = {}
     artist_track_words = defaultdict(set)
     artist_playlists_set = defaultdict(set)
+    normalized_occ = defaultdict(Counter)
+    doc_freq = Counter()
 
     for pl_idx, pl in enumerate(playlists):
+        genre = pl.get("genre")
         seen_in_pl = set()
         pid = pl.get("id") or str(pl_idx)
         for t in pl.get("tracks", []):
@@ -405,10 +457,17 @@ def main():
                 artist_playlist_count[art_key] += 1
                 seen_in_pl.add(art_key)
                 artist_playlists_set[art_key].add(pid)
+                if genre:
+                    normalized_occ[art_key][genre] += 1
+                    doc_freq[genre] += 1
             if title:
                 artist_track_words[art_key].update(extract_content_words(title))
             if art_key not in artist_canonical_case or name[0].isupper():
                 artist_canonical_case[art_key] = name
+
+    # Sync occurrences file with all current playlists
+    with open(OCCURRENCES_FILE, "w", encoding="utf-8") as f:
+        json.dump(normalized_occ, f)
 
     surviving_keys = [k for k, c in artist_playlist_count.items() if c >= args.min_playlists]
     # Sort descending by playlist count so most prominent headliners are processed first
@@ -424,14 +483,14 @@ def main():
     cache = load_json_cache(CACHE_FILE)
     print(f"Loaded {len(cache)} cached artist enrichment entries.")
 
-    # 3. Document frequencies for IDF calculation
-    normalized_occ = defaultdict(Counter)
-    doc_freq = Counter()
-    for art, g_map in occurrences.items():
-        clean_art = art.lower().strip()
-        for g, cnt in g_map.items():
-            normalized_occ[clean_art][g] += cnt
-            doc_freq[g] += 1
+    # 3. Load EveryNoise genre popularity ranks
+    genre_ranks = {}
+    if os.path.exists(GENRES_FILE):
+        with open(GENRES_FILE, "r", encoding="utf-8") as f:
+            ranked_data = json.load(f)
+            genre_ranks = {item["genre"].lower().strip(): item["rank"] for item in ranked_data if "genre" in item and "rank" in item}
+    print(f"Loaded {len(genre_ranks)} genre popularity ranks from EveryNoise.")
+
     total_docs = max(1, len(normalized_occ))
 
     deezer = DeezerArbiter()
@@ -529,13 +588,12 @@ def main():
         scraped_list = canonical_scraped_names[aid]
         primary_scraped = scraped_list[0] if scraped_list else canonical_name.lower()
 
-        # Top 3 IDF Subgenres computed from merged occurrences across all variants
-        top_subgenres = compute_idf_top_subgenres(canonical_genre_occurrences[aid], doc_freq, total_docs)
+        # Top 3 Rank-Aware Specificity Subgenres computed from merged occurrences across all variants
+        top_subgenres = compute_rank_aware_top_subgenres(canonical_genre_occurrences[aid], genre_ranks, total_pl)
+        if not top_subgenres:
+            top_subgenres = [format_genre_name(primary_scraped)] if primary_scraped else ["Other"]
 
-        if not top_subgenres and "topSubgenres" in meta:
-            top_subgenres = meta["topSubgenres"]
-
-        primary_genre = meta.get("primaryGenre") or (top_subgenres[0] if top_subgenres else "Other")
+        primary_genre = top_subgenres[0] if top_subgenres else "Other"
 
         catalog_entry = {
             "id": aid,

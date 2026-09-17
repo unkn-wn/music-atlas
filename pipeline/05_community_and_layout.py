@@ -272,7 +272,7 @@ def run_archipelago_layout(
 def main():
     parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & Archipelago Layout.")
     parser.add_argument("--num-iters", type=int, default=300, help="Vectorized physics iterations (default: 300)")
-    parser.add_argument("--canvas-bound", type=float, default=3200.0, help="Canvas coordinate half-width (default: 3200.0)")
+    parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width (default: 6400.0)")
     parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count (default: 128)")
     parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter (default: 2.8 for >=128, 1.6 for 64)")
     args = parser.parse_args()
@@ -348,36 +348,38 @@ def main():
     communities = sorted(communities, key=len, reverse=True)
     print(f"Agglomerated into {len(communities)} macro-continents.")
 
-    # 2. Consensus Titles via Smoothed TF-IDF over Artist Subgenres
-    total_comms = len(communities)
-    genre_doc_freq = Counter()
-    comm_genre_counts = []
+    # 2. Consensus Titles via Intra-Community Member Majority Coverage & Contrastive Lift
+    total_artists_in_graph = sum(len(c) for c in communities) or 1
+    global_subgenre_artist_count = Counter()
+    for a_id, a_data in catalog_map.items():
+        for g in a_data.get("topSubgenres", []):
+            global_subgenre_artist_count[g] += 1
 
+    comm_genre_member_counts = []
     for comm in communities:
-        g_counter = Counter()
+        g_comm_members = Counter()
         for a_id in comm:
             a_data = catalog_map.get(a_id, {})
-            for g in a_data.get("topSubgenres", a_data.get("genres", [])):
-                g_counter[g] += 1
-        comm_genre_counts.append(g_counter)
-        for g in g_counter:
-            genre_doc_freq[g] += 1
+            for g in a_data.get("topSubgenres", []):
+                g_comm_members[g] += 1
+        comm_genre_member_counts.append(g_comm_members)
 
     continents = []
     artist_continent_map = {}
 
-    for idx, (comm, g_counter) in enumerate(tqdm(zip(communities, comm_genre_counts), total=len(communities), desc="Stage 4C: Continents TF-IDF", unit="continent"), start=1):
+    for idx, (comm, g_member_counts) in enumerate(tqdm(zip(communities, comm_genre_member_counts), total=len(communities), desc="Stage 4C: Continents Consensus", unit="continent"), start=1):
         color = CONTINENT_PALETTE[(idx - 1) % len(CONTINENT_PALETTE)]
-        total_genres_in_comm = sum(g_counter.values()) or 1
+        comm_size = len(comm) or 1
 
-        tfidf_scores = []
-        for g, count in g_counter.items():
-            tf = count / total_genres_in_comm
-            idf = math.log((total_comms + 1) / (genre_doc_freq[g] + 1)) + 1.0
-            tfidf_scores.append((g, tf * idf))
+        consensus_scores = []
+        for g, count in g_member_counts.items():
+            coverage = count / comm_size
+            global_cov = global_subgenre_artist_count[g] / total_artists_in_graph
+            score = (coverage ** 0.8) * math.log(1.0 + (coverage / (global_cov + 0.02)))
+            consensus_scores.append((score, count, g))
 
-        tfidf_scores.sort(key=lambda x: x[1], reverse=True)
-        top_genres = [format_genre_name(g[0]) for g in tfidf_scores[:3]]
+        consensus_scores.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        top_genres = [format_genre_name(g[2]) for g in consensus_scores[:3]]
 
         if top_genres:
             title = " / ".join(top_genres)

@@ -8,6 +8,27 @@ interface SearchBarProps {
   selectedArtistId: string | null;
 }
 
+interface IndexedNode {
+  node: AtlasNode;
+  normLabel: string;
+  firstWord: string;
+  words: string[];
+  normPrimary: string;
+  normSubgenres: string[];
+  normContinent: string;
+  subscribers: number;
+}
+
+// Normalize diacritics, lowercase, and trim for robust global search
+const normalizeSearchText = (str: string): string => {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+};
+
 export const SearchBar: React.FC<SearchBarProps> = ({
   nodes,
   onSelectArtist,
@@ -19,92 +40,141 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Normalize diacritics, lowercase, and trim for robust global search
-  const normalizeSearchText = (str: string): string => {
-    if (!str) return '';
-    return str
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim();
-  };
+  // Defer query updates so typing remains buttery smooth at 120 FPS without input lag
+  const deferredQuery = React.useDeferredValue(query);
 
-  // Compute hierarchical match score prioritizing artist names over genres
-  const getSearchScore = (node: AtlasNode, qNorm: string, qTokens: string[]): number => {
-    const labelNorm = normalizeSearchText(node.label || '');
-    if (!labelNorm) return 0;
+  // Pre-indexed search metadata pre-sorted by popularity (subscribers desc)
+  // Built only once when graph data loads — completely eliminates per-keystroke string allocations
+  const indexedNodes = React.useMemo<IndexedNode[]>(() => {
+    if (!nodes || nodes.length === 0) return [];
+    const len = nodes.length;
+    const list: IndexedNode[] = new Array(len);
 
-    // 1. Exact artist name match
-    if (labelNorm === qNorm) return 10000;
+    for (let i = 0; i < len; i++) {
+      const n = nodes[i];
+      const normLabel = normalizeSearchText(n.label || '');
+      const words = normLabel ? normLabel.split(/[\s\-_–—,.'"/]+/).filter(Boolean) : [];
+      const rawPrimary = normalizeSearchText(n.primaryGenre || '');
+      const normPrimary = !['other', 'artist', 'unknown', 'eclectic'].includes(rawPrimary) ? rawPrimary : '';
+      const normSubgenres = (n.topSubgenres || []).map((g) => normalizeSearchText(g || '')).filter(Boolean);
+      const normContinent = normalizeSearchText(n.continentName || '');
 
-    const labelTokens = labelNorm.split(/[\s\-_–—,.'"/]+/).filter(Boolean);
+      list[i] = {
+        node: n,
+        normLabel,
+        firstWord: words[0] || '',
+        words,
+        normPrimary,
+        normSubgenres,
+        normContinent,
+        subscribers: n.subscribers || 0
+      };
+    }
 
-    // 2. Artist name starts with query as an exact whole word (e.g. "Taylor" -> "Taylor Swift")
-    if (labelTokens[0] === qNorm) return 9000;
+    // Pre-sort by subscribers descending so all priority buckets are automatically popularity-ranked
+    list.sort((a, b) => b.subscribers - a.subscribers);
+    return list;
+  }, [nodes]);
 
-    // 3. Any word in artist name exactly equals query (e.g. "bach" -> "Johann Sebastian Bach")
-    if (labelTokens.includes(qNorm)) return 8500;
-
-    // 4. Artist name starts with query (e.g. "Bachman" -> "Bachman-Turner Overdrive")
-    if (labelNorm.startsWith(qNorm)) return 7500;
-
-    // 5. All query tokens appear in artist name (e.g. "sebastian bach" in "Johann Sebastian Bach")
-    if (qTokens.length > 1 && qTokens.every((t) => labelNorm.includes(t))) return 7000;
-
-    // 6. Any word in artist name starts with query
-    if (labelTokens.some((w) => w.startsWith(qNorm))) return 5000;
-
-    // 7. Substring match inside artist name
-    if (labelNorm.includes(qNorm)) return 4000;
-
-    // Next: Genre / Subgenre matches
-    const rawPrimary = normalizeSearchText(node.primaryGenre || '');
-    const primary = !['other', 'artist', 'unknown', 'eclectic'].includes(rawPrimary) ? rawPrimary : '';
-    const subgenres = (node.topSubgenres || []).map((g) => normalizeSearchText(g || '')).filter(Boolean);
-
-    // 8. Exact Primary Genre or Subgenre match (e.g. "classical")
-    if (primary === qNorm || subgenres.includes(qNorm)) return 2000;
-
-    // 9. Primary Genre or Subgenre starts with query (e.g. "bachata")
-    if (primary.startsWith(qNorm) || subgenres.some((g) => g.startsWith(qNorm))) return 1500;
-
-    // 10. Primary Genre or Subgenre contains query
-    if (primary.includes(qNorm) || subgenres.some((g) => g.includes(qNorm))) return 1000;
-
-    // 11. Continent name matches
-    const continent = normalizeSearchText(node.continentName || '');
-    if (continent.includes(qNorm)) return 500;
-
-    return 0;
-  };
-
-  // Rank matching artists prioritizing exact name matches, then whole words, then genres
+  // Ultra-fast tiered matching over pre-indexed nodes
   const filteredArtists = React.useMemo(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return [];
+    const trimmed = deferredQuery.trim();
+    if (!trimmed || indexedNodes.length === 0) return [];
 
     const qNorm = normalizeSearchText(trimmed);
-    const qTokens = qNorm.split(/\s+/).filter(Boolean);
+    if (!qNorm) return [];
 
-    const scored: { node: AtlasNode; score: number }[] = [];
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      const score = getSearchScore(node, qNorm, qTokens);
-      if (score > 0) {
-        scored.push({ node, score });
+    const qTokens = qNorm.split(/\s+/).filter(Boolean);
+    const isSingleWord = qTokens.length <= 1;
+
+    // Priority buckets (items within each bucket are already popularity-sorted)
+    const exact: AtlasNode[] = [];
+    const starts: AtlasNode[] = [];
+    const wordStarts: AtlasNode[] = [];
+    const allTokensMatch: AtlasNode[] = [];
+    const contains: AtlasNode[] = [];
+    const genreMatches: AtlasNode[] = [];
+
+    const maxEarlyBreak = 25;
+
+    for (let i = 0; i < indexedNodes.length; i++) {
+      const item = indexedNodes[i];
+      const { normLabel, firstWord, words, normPrimary, normSubgenres, normContinent } = item;
+
+      // Fast-reject check: if the label contains the query, test artist name match tiers
+      const hasSubstring = normLabel.includes(qNorm);
+
+      if (hasSubstring) {
+        if (normLabel === qNorm) {
+          exact.push(item.node);
+        } else if (firstWord === qNorm || normLabel.startsWith(qNorm)) {
+          starts.push(item.node);
+        } else {
+          let wordMatched = false;
+          for (let j = 0; j < words.length; j++) {
+            if (words[j].startsWith(qNorm)) {
+              wordStarts.push(item.node);
+              wordMatched = true;
+              break;
+            }
+          }
+          if (!wordMatched && qNorm.length > 1) {
+            contains.push(item.node);
+          }
+        }
+      } else if (!isSingleWord) {
+        // Multi-word search (e.g. "taylor swift" or "daft punk")
+        let allTokensInLabel = true;
+        for (let t = 0; t < qTokens.length; t++) {
+          if (!normLabel.includes(qTokens[t])) {
+            allTokensInLabel = false;
+            break;
+          }
+        }
+        if (allTokensInLabel) {
+          allTokensMatch.push(item.node);
+        }
+      }
+
+      // Secondary: Genre or Continent matches (only when query length > 2)
+      if (qNorm.length > 2) {
+        if (normPrimary.includes(qNorm) || normContinent.includes(qNorm)) {
+          genreMatches.push(item.node);
+        } else {
+          for (let g = 0; g < normSubgenres.length; g++) {
+            if (normSubgenres[g].includes(qNorm)) {
+              genreMatches.push(item.node);
+              break;
+            }
+          }
+        }
+      }
+
+      // Early break if we already have plenty of top name matches
+      if (exact.length + starts.length + wordStarts.length >= maxEarlyBreak) {
+        break;
       }
     }
 
-    scored.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const subsA = a.node.subscribers || 0;
-      const subsB = b.node.subscribers || 0;
-      if (subsB !== subsA) return subsB - subsA;
-      return (a.node.label || '').length - (b.node.label || '').length;
-    });
+    // Collect top 10 unique results in strict priority order
+    const results: AtlasNode[] = [];
+    const seen = new Set<string>();
+    const buckets = [exact, starts, wordStarts, allTokensMatch, contains, genreMatches];
 
-    return scored.slice(0, 10).map((s) => s.node);
-  }, [nodes, query]);
+    for (let b = 0; b < buckets.length; b++) {
+      const bucket = buckets[b];
+      for (let i = 0; i < bucket.length; i++) {
+        const node = bucket[i];
+        if (!seen.has(node.id)) {
+          seen.add(node.id);
+          results.push(node);
+          if (results.length >= 10) return results;
+        }
+      }
+    }
+
+    return results;
+  }, [indexedNodes, deferredQuery]);
 
   // Reset active keyboard index when search results change
   useEffect(() => {

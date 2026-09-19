@@ -44,6 +44,8 @@ CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 COMMUNITIES_FILE = os.path.join(OUTPUT_DIR, "communities.json")
 LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
+PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
+GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 
 # Perceptually distinct, vibrant 128-continent palette
 CONTINENT_PALETTE = [
@@ -348,7 +350,78 @@ def main():
     communities = sorted(communities, key=len, reverse=True)
     print(f"Agglomerated into {len(communities)} macro-continents.")
 
-    # 2. Consensus Titles via Intra-Community Member Majority Coverage & Contrastive Lift
+    # 2. Dual-Harmony Community-Affinity Subgenre Selection
+    # Uses topological continent membership to purge cross-genre crawler leaks (e.g. filmi on pop stars)
+    if os.path.exists(PLAYLISTS_FILE) and os.path.exists(GENRES_FILE):
+        print("Enriching artist subgenres via Dual-Harmony Community Coherence Network...")
+        with open(GENRES_FILE, "r", encoding="utf-8") as f:
+            genre_ranks_data = json.load(f)
+        genre_ranks = {
+            item["genre"].lower().strip(): item["rank"]
+            for item in genre_ranks_data
+            if "genre" in item and "rank" in item
+        }
+
+        with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
+            playlists_data = json.load(f)
+
+        name_to_aid = {}
+        for a in catalog:
+            aid = a["id"]
+            name_to_aid[a.get("name", "").lower().strip()] = aid
+            for s_name in a.get("scraped_names", []):
+                name_to_aid[s_name.lower().strip()] = aid
+
+        artist_to_comm_idx = {}
+        for c_idx, comm in enumerate(communities, start=1):
+            for a_id in comm:
+                artist_to_comm_idx[a_id] = c_idx
+
+        artist_genre_counts = defaultdict(Counter)
+        cont_genre_artists = defaultdict(lambda: defaultdict(set))
+
+        for pl in playlists_data:
+            g = pl.get("genre")
+            if not g:
+                continue
+            pl_aids = {
+                name_to_aid[t.get("artist_name", "").strip().lower()]
+                for t in pl.get("tracks", [])
+                if t.get("artist_name", "").strip().lower() in name_to_aid
+            }
+            for a_id in pl_aids:
+                artist_genre_counts[a_id][g] += 1
+                c_idx = artist_to_comm_idx.get(a_id)
+                if c_idx:
+                    cont_genre_artists[c_idx][g].add(a_id)
+
+        enriched_count = 0
+        for a_id, a_data in catalog_map.items():
+            g_counts = artist_genre_counts.get(a_id)
+            if not g_counts:
+                continue
+            c_idx = artist_to_comm_idx.get(a_id, 1)
+            scored = []
+            for g, cnt in g_counts.items():
+                if cnt < 2 and len(g_counts) > 2:
+                    continue
+                rank = genre_ranks.get(g.lower().strip(), 3500)
+                w_rank = 1.0 / ((70.0 + rank) ** 0.65)
+                comm_art = len(cont_genre_artists[c_idx].get(g, set()))
+                comm_fac = (comm_art / (comm_art + 15.0)) ** 0.5
+                score = (cnt ** 0.85) * w_rank * comm_fac
+                scored.append((score, cnt, g))
+
+            scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            if scored:
+                a_data["topSubgenres"] = [format_genre_name(x[2]) for x in scored[:3]]
+                enriched_count += 1
+
+        with open(CATALOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(catalog, f, indent=2)
+        print(f"Enriched {enriched_count} artists with community-coherent subgenres.")
+
+    # 3. Consensus Titles via Intra-Community Member Majority Coverage & Contrastive Lift
     total_artists_in_graph = sum(len(c) for c in communities) or 1
     global_subgenre_artist_count = Counter()
     for a_id, a_data in catalog_map.items():

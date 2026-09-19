@@ -109,7 +109,7 @@ export const App: React.FC = () => {
   const activeAudioArtistRef = useRef(activeAudioArtist);
   activeAudioArtistRef.current = activeAudioArtist;
 
-  // Global keyboard shortcuts (Escape to reset view, Space to toggle active audio preview)
+  // Global keyboard shortcuts (Escape to deselect artist, Space to toggle active audio preview)
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -121,7 +121,6 @@ export const App: React.FC = () => {
 
       if (e.key === 'Escape') {
         setSelectedArtistId(null);
-        canvasRef.current?.resetView();
         return;
       }
 
@@ -239,7 +238,7 @@ export const App: React.FC = () => {
         <button
           onClick={() => canvasRef.current?.resetView()}
           className="glass-panel w-9 h-9 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
-          title="Reset Map View (Esc)"
+          title="Reset Map View"
         >
           <Maximize2 className="w-4 h-4" />
         </button>

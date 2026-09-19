@@ -406,7 +406,7 @@ def compute_rank_aware_top_subgenres(
     scored = []
     for g, (cnt, share) in candidates.items():
         rank = genre_ranks.get(g.lower().strip(), 3500)
-        w_rank = 1.0 / (rank ** 0.5)
+        w_rank = 1.0 / ((70.0 + rank) ** 0.65)
         score = (cnt ** 0.85) * (share ** 0.3) * w_rank
         scored.append((score, cnt, g))
 

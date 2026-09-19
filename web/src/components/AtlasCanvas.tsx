@@ -167,7 +167,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       labelDensity: 0.35,
       labelGridCellSize: 90,
       labelRenderedSizeThreshold: 8.5,
-      minCameraRatio: 0.0015,
+      minCameraRatio: 0.0005,
       maxCameraRatio: 1.35,
       doubleClickZoomingRatio: 1,
       enableEdgeEvents: false,

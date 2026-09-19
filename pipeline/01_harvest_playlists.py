@@ -193,14 +193,6 @@ def is_catalog_qualified(track: Dict) -> bool:
         if dur_sec > 600 and re.search(r"\bmix\b", title, re.IGNORECASE):
             return False
 
-    vtype = track.get("videoType", "")
-    has_official_vtype = vtype in ("MUSIC_VIDEO_TYPE_ATV", "MUSIC_VIDEO_TYPE_OMV")
-    album = track.get("album")
-    has_album = bool(album and isinstance(album, dict) and album.get("name") and album.get("name").strip())
-
-    if not (has_official_vtype or has_album):
-        return False
-
     return True
 
 def load_checkpoint() -> Tuple[List[Dict], Dict[str, Dict[str, int]], Dict[str, int], Set[str]]:
@@ -290,7 +282,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 1: Authentic Multi-Subgenre Community Playlist Harvesting.")
     parser.add_argument("--limit-genres", type=int, default=None, help="Limit number of genres to crawl")
     parser.add_argument("--target-playlists", type=int, default=20, help="Target qualifying playlists per genre (default: 20)")
-    parser.add_argument("--tier1-limit", type=int, default=12, help="Max playlists from direct search (default: 12)")
+    parser.add_argument("--tier1-limit", type=int, default=20, help="Max playlists from direct search (default: 20)")
     parser.add_argument("--max-anchors", type=int, default=8, help="Max anchor artists for Tier 2 recommendation discovery (default: 8)")
     parser.add_argument("--rate-limit", type=float, default=3.0, help="Max requests per second for YTM (default: 3.0)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
@@ -444,15 +436,20 @@ def main():
         direct_tracks_for_anchors = list(existing_genre_tracks[genre])
 
         # =====================================================================
-        # TIER 1: Direct Community Search ("{genre} playlist" -> fallback bare)
+        # TIER 1: Multi-Query Direct Search & Consensus Coherence Gate
         # =====================================================================
         if accepted_for_genre < args.tier1_limit:
-            primary_query = f"{genre} playlist"
+            search_queries = [
+                g_info.get("primary_query") or f"{genre} playlist",
+                g_info.get("secondary_query") or f"{genre} mix",
+                g_info.get("tertiary_query") or f"best of {genre}",
+                f"{genre} songs"
+            ]
             direct_candidates = []
             seen_cand_ids = set()
 
-            for q in [primary_query, genre]:
-                if len(direct_candidates) >= 15:
+            for q in search_queries:
+                if len(direct_candidates) >= 35:
                     break
                 for retry in range(2):
                     try:
@@ -467,10 +464,11 @@ def main():
                     except Exception:
                         time.sleep(1.0)
 
+            # Fetch and validate candidates
+            valid_cand_pool = []
             for cand in direct_candidates:
-                if accepted_for_genre >= args.tier1_limit or accepted_for_genre >= args.target_playlists:
+                if len(valid_cand_pool) >= 30:
                     break
-
                 bid = cand.get("browseId")
                 if not bid or bid in existing_playlist_ids:
                     continue
@@ -490,112 +488,166 @@ def main():
 
                 valid_pl = process_and_validate_playlist(pl_data, bid, genre, author_name, author_id)
                 if valid_pl:
-                    seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
-                    existing_playlist_ids.add(bid)
-                    playlists.append(valid_pl)
-                    accepted_for_genre += 1
-                    existing_genre_counts[genre] += 1
+                    # Collect unique artist names for consensus gate
+                    art_set = {t["artist_name"].lower().strip() for t in valid_pl["tracks"] if t.get("artist_name")}
+                    valid_cand_pool.append({
+                        "pl": valid_pl,
+                        "bid": bid,
+                        "author_id": author_id,
+                        "artists": art_set
+                    })
 
-                    for t in valid_pl["tracks"]:
-                        occ_map[t["artist_name"]][genre] += 1
-                        if t.get("videoId"):
-                            direct_tracks_for_anchors.append(t)
-                            existing_genre_tracks[genre].append(t)
+            # Calculate artist occurrences across candidate playlists
+            art_cand_freq = Counter()
+            for item in valid_cand_pool:
+                for art in item["artists"]:
+                    art_cand_freq[art] += 1
+
+            # Consensus artists: appeared in >= 2 candidate playlists
+            consensus_artists = {art for art, cnt in art_cand_freq.items() if cnt >= 2}
+
+            # Filter and rank candidates by consensus overlap
+            scored_candidates = []
+            for item in valid_cand_pool:
+                if consensus_artists:
+                    overlap = len(item["artists"].intersection(consensus_artists))
+                    if overlap > 0:
+                        scored_candidates.append((item, overlap))
+                else:
+                    # If rare genre with no consensus yet, retain all valid candidates
+                    scored_candidates.append((item, 0))
+
+            # Prioritize playlists with higher consensus overlap
+            scored_candidates.sort(key=lambda x: x[1], reverse=True)
+
+            for item, overlap in scored_candidates:
+                if accepted_for_genre >= args.tier1_limit or accepted_for_genre >= args.target_playlists:
+                    break
+
+                valid_pl = item["pl"]
+                bid = item["bid"]
+                author_id = item["author_id"]
+
+                if seen_authors.get(author_id, 0) >= 2 or bid in existing_playlist_ids:
+                    continue
+
+                seen_authors[author_id] = seen_authors.get(author_id, 0) + 1
+                existing_playlist_ids.add(bid)
+                playlists.append(valid_pl)
+                accepted_for_genre += 1
+                existing_genre_counts[genre] += 1
+
+                for t in valid_pl["tracks"]:
+                    occ_map[t["artist_name"]][genre] += 1
+                    if t.get("videoId"):
+                        direct_tracks_for_anchors.append(t)
+                        existing_genre_tracks[genre].append(t)
 
         # =====================================================================
-        # TIER 2: Collaborative Expansion via Song Recommendations
+        # TIER 2: Collaborative Expansion via Song Recommendations (Fallback)
         # =====================================================================
         needed_tier2 = args.target_playlists - accepted_for_genre
         if needed_tier2 > 0 and direct_tracks_for_anchors:
-            # 1. Consensus Frequency Ranking
-            track_counts = Counter(
-                (t.get("videoId", ""), t.get("artist_name", ""), t.get("title", ""), t.get("is_qualified", False))
-                for t in direct_tracks_for_anchors
-            )
+            # 1. Consensus Frequency Ranking across accepted playlists
+            artist_pl_counts = Counter()
+            artist_sample_track = {}
+            for t in direct_tracks_for_anchors:
+                art = t.get("artist_name", "").strip()
+                if art:
+                    artist_sample_track[art.lower()] = t
 
-            # 2. Select Diverse, Catalog-Qualified Anchors (1 Track per Artist)
-            anchors = []
-            seen_anchor_artists = set()
+            for p in playlists:
+                if p.get("genre") == genre:
+                    p_artists = {t.get("artist_name", "").strip().lower() for t in p.get("tracks", [])}
+                    for art in p_artists:
+                        if art:
+                            artist_pl_counts[art] += 1
 
-            # First pass: qualified catalog releases
-            for (vid, art, title, qualified), count in track_counts.most_common():
-                art_low = art.lower().strip()
-                if qualified and art_low not in seen_anchor_artists and len(art_low) > 1:
-                    anchors.append({"videoId": vid, "artist": art, "title": title})
-                    seen_anchor_artists.add(art_low)
-                    if len(anchors) >= args.max_anchors:
+            # Anchors MUST have appeared in >= 2 distinct qualifying playlists (Strict Consensus Anchor)
+            consensus_anchors = [
+                artist_sample_track[art]
+                for art, count in artist_pl_counts.most_common()
+                if count >= 2 and art in artist_sample_track
+            ][:args.max_anchors]
+
+            genre_consensus_set = {art for art, cnt in artist_pl_counts.items() if cnt >= 2}
+
+            # 2. Query Recommendations for Anchors (only if consensus exists)
+            if consensus_anchors and genre_consensus_set:
+                for a in consensus_anchors:
+                    if accepted_for_genre >= args.target_playlists:
                         break
 
-            # Fallback pass if needed
-            if len(anchors) < args.max_anchors:
-                for (vid, art, title, qualified), count in track_counts.most_common():
-                    art_low = art.lower().strip()
-                    if art_low not in seen_anchor_artists and len(art_low) > 1:
-                        anchors.append({"videoId": vid, "artist": art, "title": title})
-                        seen_anchor_artists.add(art_low)
-                        if len(anchors) >= args.max_anchors:
-                            break
-
-            # 3. Query Recommendations for Anchors
-            for a in anchors:
-                if accepted_for_genre >= args.target_playlists:
-                    break
-
-                try:
-                    pace_request()
-                    watch = yt.get_watch_playlist(videoId=a["videoId"], limit=5)
-                    rel_token = watch.get("related")
-                    if not rel_token:
+                    vid = a.get("videoId")
+                    if not vid:
                         continue
 
-                    pace_request()
-                    related = yt.get_song_related(rel_token)
-                    rec_pl_items = []
-                    for shelf in related or []:
-                        shelf_title = shelf.get("title", "").lower()
-                        if "playlist" in shelf_title:
-                            for item in shelf.get("contents", []):
-                                pl_id = item.get("browseId") or item.get("playlistId")
-                                if pl_id and (pl_id.startswith("PL") or pl_id.startswith("VLPL")):
-                                    rec_pl_items.append(item)
-
-                    for r_item in rec_pl_items:
-                        if accepted_for_genre >= args.target_playlists:
-                            break
-
-                        r_bid = r_item.get("browseId") or r_item.get("playlistId")
-                        if not r_bid or r_bid in existing_playlist_ids:
+                    try:
+                        pace_request()
+                        watch = yt.get_watch_playlist(videoId=vid, limit=5)
+                        rel_token = watch.get("related")
+                        if not rel_token:
                             continue
 
-                        r_pl_data = fetch_playlist_safely(r_bid)
-                        if not r_pl_data:
-                            continue
+                        pace_request()
+                        related = yt.get_song_related(rel_token)
+                        rec_pl_items = []
+                        for shelf in related or []:
+                            if not isinstance(shelf, dict):
+                                continue
+                            shelf_title = shelf.get("title", "").lower()
+                            if "playlist" in shelf_title:
+                                contents = shelf.get("contents", [])
+                                if isinstance(contents, list):
+                                    for item in contents:
+                                        if isinstance(item, dict):
+                                            pl_id = item.get("browseId") or item.get("playlistId")
+                                            if pl_id and (pl_id.startswith("PL") or pl_id.startswith("VLPL")):
+                                                rec_pl_items.append(item)
 
-                        r_author_obj = r_pl_data.get("author") or {}
-                        if isinstance(r_author_obj, dict):
-                            r_author_name = r_author_obj.get("name", "")
-                            r_author_id = r_author_obj.get("id") or r_author_name or f"anon_{r_bid[:8]}"
-                        else:
-                            r_author_name = str(r_author_obj)
-                            r_author_id = r_author_name or f"anon_{r_bid[:8]}"
+                        for r_item in rec_pl_items:
+                            if accepted_for_genre >= args.target_playlists:
+                                break
 
-                        if seen_authors.get(r_author_id, 0) >= 2:
-                            continue
+                            r_bid = r_item.get("browseId") or r_item.get("playlistId")
+                            if not r_bid or r_bid in existing_playlist_ids:
+                                continue
 
-                        r_valid_pl = process_and_validate_playlist(r_pl_data, r_bid, genre, r_author_name, r_author_id)
-                        if r_valid_pl:
-                            seen_authors[r_author_id] = seen_authors.get(r_author_id, 0) + 1
-                            existing_playlist_ids.add(r_bid)
-                            playlists.append(r_valid_pl)
-                            accepted_for_genre += 1
-                            existing_genre_counts[genre] += 1
+                            r_pl_data = fetch_playlist_safely(r_bid)
+                            if not r_pl_data:
+                                continue
 
-                            for t in r_valid_pl["tracks"]:
-                                occ_map[t["artist_name"]][genre] += 1
-                                if t.get("videoId"):
-                                    existing_genre_tracks[genre].append(t)
-                except Exception:
-                    continue
+                            r_author_obj = r_pl_data.get("author") or {}
+                            if isinstance(r_author_obj, dict):
+                                r_author_name = r_author_obj.get("name", "")
+                                r_author_id = r_author_obj.get("id") or r_author_name or f"anon_{r_bid[:8]}"
+                            else:
+                                r_author_name = str(r_author_obj)
+                                r_author_id = r_author_name or f"anon_{r_bid[:8]}"
+
+                            if seen_authors.get(r_author_id, 0) >= 2:
+                                continue
+
+                            r_valid_pl = process_and_validate_playlist(r_pl_data, r_bid, genre, r_author_name, r_author_id)
+                            if r_valid_pl:
+                                # COHERENCE GATE: Must share at least 1 consensus artist with the genre
+                                r_artists = {t["artist_name"].lower().strip() for t in r_valid_pl["tracks"] if t.get("artist_name")}
+                                if not r_artists.intersection(genre_consensus_set):
+                                    continue  # Discard out-of-genre recommendation!
+
+                                seen_authors[r_author_id] = seen_authors.get(r_author_id, 0) + 1
+                                existing_playlist_ids.add(r_bid)
+                                playlists.append(r_valid_pl)
+                                accepted_for_genre += 1
+                                existing_genre_counts[genre] += 1
+
+                                for t in r_valid_pl["tracks"]:
+                                    occ_map[t["artist_name"]][genre] += 1
+                                    if t.get("videoId"):
+                                        existing_genre_tracks[genre].append(t)
+                    except Exception:
+                        continue
+
 
         completed_genres.add(genre)
         completed_genre_list.append(genre)

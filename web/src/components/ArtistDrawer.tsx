@@ -84,9 +84,16 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
   return (
     <div className="glass-panel w-80 sm:w-96 shadow-2xl flex flex-col h-[calc(100vh-6rem)] overflow-hidden pointer-events-auto border-l border-white/15">
-      {/* Header Image & Close Button with fixed 1:1 square ratio to show full artist portrait without squishing */}
+      {/* Header Image & Close Button with fixed 1:1 square ratio for zero-layout-shift skeleton and full portrait display */}
       <div
-        style={{ width: '100%', aspectRatio: '1 / 1', position: 'relative', overflow: 'hidden', backgroundColor: '#07090e', flexShrink: 0 }}
+        style={{
+          width: '100%',
+          aspectRatio: '1 / 1',
+          position: 'relative',
+          overflow: 'hidden',
+          backgroundColor: '#07090e',
+          flexShrink: 0
+        }}
         className="aspect-square border-b border-white/10"
       >
         {/* High-visibility Skeleton placeholder while artist picture is loading (no fading) */}
@@ -147,14 +154,14 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             aria-hidden="true"
             referrerPolicy="no-referrer"
             crossOrigin="anonymous"
-            style={{ opacity: 0.35 }}
+            style={{ opacity: 0.25 }}
             className="absolute inset-0 w-full h-full object-cover blur-xl scale-125 pointer-events-none"
             onError={(e) => {
               (e.target as HTMLElement).style.display = 'none';
             }}
           />
         )}
-        {/* Main artist photo with 1:1 square ratio (no fading) */}
+        {/* Main artist photo rendered at 100% width and 100% height */}
         <img
           key={`${artist.id}-main`}
           src={sidebarImageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
@@ -163,7 +170,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           crossOrigin="anonymous"
           onLoad={() => setLoadedArtistId(artist.id)}
           style={{ display: isImageLoaded ? 'block' : 'none' }}
-          className="w-full h-full object-cover object-top"
+          className="w-full h-full object-cover object-center"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             if (artist.image && target.src !== artist.image) {
@@ -174,9 +181,18 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             setLoadedArtistId(artist.id);
           }}
         />
+        {/* Soft bottom gradient scrim for text readability (does not darken top/middle) */}
         <div
-          style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 6 }}
-          className="bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: '55%',
+            pointerEvents: 'none',
+            zIndex: 6,
+            background: 'linear-gradient(to top, rgba(7, 9, 14, 0.72) 0%, rgba(7, 9, 14, 0.28) 55%, transparent 100%)'
+          }}
         />
 
         {/* Close Button */}

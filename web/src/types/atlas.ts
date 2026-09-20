@@ -12,7 +12,6 @@ export interface ArtistDetail {
   topTrack?: string;
   previewUrl?: string;
   spotifyUrl?: string;
-  deezerUrl?: string;
   totalPlaylists?: number;
   topCrossovers?: CrossoverNeighbor[];
 }
@@ -36,10 +35,8 @@ export interface AtlasNode {
   topTrack?: string;
   previewUrl?: string;
   spotifyUrl?: string;
-  deezerUrl?: string;
   totalPlaylists?: number;
   topCrossovers?: CrossoverNeighbor[];
-  [key: string]: any;
 }
 
 export interface AtlasEdge {
@@ -50,7 +47,6 @@ export interface AtlasEdge {
   weight: number;
   size: number;
   isBridge?: boolean;
-  [key: string]: any;
 }
 
 export interface Continent {

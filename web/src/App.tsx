@@ -26,7 +26,6 @@ export const App: React.FC = () => {
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const [selectedContinentId, setSelectedContinentId] = useState<number | null>(null);
-  const [hoveredContinentId, setHoveredContinentId] = useState<number | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
@@ -86,9 +85,6 @@ export const App: React.FC = () => {
     };
   }, [activeAudioArtist, detailsMap]);
 
-  // Drawer artist bound strictly to deliberate selection
-  const drawerArtist = selectedArtist;
-
   // Immediate, synchronous artist selection (clears continent filter to maintain sync)
   const handleSelectArtist = useCallback((id: string | null, shouldFly: boolean = false) => {
     setSelectedArtistId(id);
@@ -108,14 +104,17 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const handleTogglePreview = (artist: AtlasNode) => {
-    if (activeAudioArtist?.id === artist.id) {
-      setIsPlayingAudio(!isPlayingAudio);
-    } else {
-      setActiveAudioArtist(artist);
-      setIsPlayingAudio(true);
-    }
-  };
+  const handleTogglePreview = useCallback((artist: AtlasNode) => {
+    setActiveAudioArtist((current) => {
+      if (current?.id === artist.id) {
+        setIsPlayingAudio((prev) => !prev);
+        return current;
+      } else {
+        setIsPlayingAudio(true);
+        return artist;
+      }
+    });
+  }, []);
 
   // Active audio artist ref for keyboard shortcuts
   const activeAudioArtistRef = useRef(activeAudioArtist);
@@ -197,7 +196,7 @@ export const App: React.FC = () => {
         {/* Brand Logo & Stats */}
         <div className="glass-panel px-3.5 py-2 flex items-center gap-2.5 shadow-xl pointer-events-auto shrink-0">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-emerald-500 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20">
-            <Radio className="w-3.5 h-3.5 text-black stroke-[2.5]" />
+            <Radio className="w-3.5 h-3.5 text-black" strokeWidth={2.5} />
           </div>
           <div className="flex items-center gap-2">
             <span className="font-extrabold text-xs sm:text-sm tracking-wider text-white">
@@ -221,8 +220,6 @@ export const App: React.FC = () => {
             continents={data.continents}
             selectedContinentId={selectedContinentId}
             onSelectContinent={handleSelectContinent}
-            hoveredContinentId={hoveredContinentId}
-            onHoverContinent={setHoveredContinentId}
           />
 
           <button
@@ -264,17 +261,17 @@ export const App: React.FC = () => {
       </div>
 
       {/* Floating Artist Inspector Drawer (Slide-over on Right) */}
-      {drawerArtist && (
+      {selectedArtist && (
         <div
           style={{ position: 'fixed', top: '72px', bottom: '24px', right: '24px', left: 'auto', width: 'auto', zIndex: 40 }}
           className="pointer-events-none flex justify-end"
         >
           <ArtistDrawer
-            key={drawerArtist.id}
-            artist={drawerArtist}
+            key={selectedArtist.id}
+            artist={selectedArtist}
             onClose={() => setSelectedArtistId(null)}
             onSelectNeighbor={(id) => handleSelectArtist(id, true)}
-            isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === drawerArtist.id}
+            isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
             onTogglePreview={handleTogglePreview}
             currentlyPlayingId={activeAudioArtist?.id || null}
           />

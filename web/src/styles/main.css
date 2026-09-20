@@ -70,7 +70,8 @@ html, body, #root {
 @media (min-width: 640px) {
   .sm\:flex { display: flex; }
   .sm\:block { display: block; }
-  .sm\:max-w-sm { max-w: 24rem; }
+  .sm\:max-w-sm { max-width: 24rem; }
+  .sm\:max-w-md { max-width: 28rem; }
   .sm\:w-96 { width: 24rem; }
   .sm\:inline-block { display: inline-block; }
 }
@@ -127,6 +128,7 @@ html, body, #root {
 .w-1\.5 { width: 0.375rem; }
 
 .max-w-md { max-width: 28rem; }
+.max-w-sm { max-width: 24rem; }
 .max-w-xs { max-width: 20rem; }
 .max-w-2xl { max-width: 42rem; }
 .max-w-lg { max-width: 32rem; }
@@ -316,6 +318,10 @@ html, body, #root {
 .opacity-100 { opacity: 1; }
 
 .blur-xl { filter: blur(24px); }
+.backdrop-blur-sm { backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.backdrop-blur-md { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.5rem; }
+.list-disc { list-style-type: disc; }
 .scale-125 { transform: scale(1.25); }
 
 .transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
@@ -445,21 +451,6 @@ input[type="range"]::-webkit-slider-thumb:hover {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.9) !important;
 }
 
-.cosmograph-hover-label {
-  font-family: 'Plus Jakarta Sans', Inter, system-ui, -apple-system, sans-serif !important;
-  font-size: 13px !important;
-  font-weight: 700 !important;
-  color: #ffffff !important;
-  background: rgba(10, 15, 26, 0.88) !important;
-  backdrop-filter: blur(8px) !important;
-  -webkit-backdrop-filter: blur(8px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  border-radius: 6px !important;
-  padding: 4px 10px !important;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
-  pointer-events: none !important;
-  white-space: nowrap !important;
-  z-index: 50 !important;
-}
+
 
 

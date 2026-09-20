@@ -6,15 +6,12 @@ interface ControlHUDProps {
   continents: Continent[];
   selectedContinentId: number | null;
   onSelectContinent: (id: number | null) => void;
-  hoveredContinentId?: number | null;
-  onHoverContinent?: (id: number | null) => void;
 }
 
 export const ControlHUD: React.FC<ControlHUDProps> = ({
   continents,
   selectedContinentId,
-  onSelectContinent,
-  onHoverContinent
+  onSelectContinent
 }) => {
   const [showContinents, setShowContinents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -23,7 +20,6 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
 
   const closePopover = () => {
     setShowContinents(false);
-    onHoverContinent?.(null);
   };
 
   useEffect(() => {
@@ -145,7 +141,6 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
                   onSelectContinent(null);
                   closePopover();
                 }}
-                onMouseEnter={() => onHoverContinent?.(null)}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium text-left cursor-pointer ${
                   selectedContinentId === null ? 'bg-emerald-500/20 text-emerald-300' : 'hover:bg-white/10 text-slate-300'
                 }`}
@@ -171,8 +166,6 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
                       onSelectContinent(isSelected ? null : c.id);
                       closePopover();
                     }}
-                    onMouseEnter={() => onHoverContinent?.(c.id)}
-                    onMouseLeave={() => onHoverContinent?.(null)}
                     className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium text-left cursor-pointer ${
                       isSelected ? 'bg-white/20 text-white' : 'hover:bg-white/10 text-slate-300'
                     }`}

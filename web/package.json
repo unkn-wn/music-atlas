@@ -9,12 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "graphology": "^0.25.4",
-    "graphology-library": "^0.8.0",
+    "@cosmograph/cosmograph": "^2.5.1",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "sigma": "^3.0.3"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2 } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
@@ -9,7 +9,18 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { AtlasNode } from './types/atlas';
 
 export const App: React.FC = () => {
-  const { data, graph, detailsMap, loading, error, loadContinentDetails } = useGraphData();
+  const {
+    data,
+    nodeMap,
+    nodeIndexMap,
+    continentIndicesMap,
+    neighborMap,
+    detailsMap,
+    loading,
+    error,
+    loadContinentDetails
+  } = useGraphData();
+
   const canvasRef = useRef<AtlasCanvasHandle | null>(null);
 
   // UI States
@@ -19,16 +30,6 @@ export const App: React.FC = () => {
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
-
-  // Fast node map for O(1) selection lookup
-  const nodeMap = useMemo(() => {
-    if (!data) return new Map<string, AtlasNode>();
-    const map = new Map<string, AtlasNode>();
-    for (const node of data.nodes) {
-      map.set(node.id, node);
-    }
-    return map;
-  }, [data]);
 
   // Fetch continent details on demand when an artist is selected
   React.useEffect(() => {
@@ -88,13 +89,24 @@ export const App: React.FC = () => {
   // Drawer artist bound strictly to deliberate selection
   const drawerArtist = selectedArtist;
 
-  // Immediate, synchronous artist selection (zero transition lag)
-  const handleSelectArtist = (id: string | null, shouldFly: boolean = false) => {
+  // Immediate, synchronous artist selection (clears continent filter to maintain sync)
+  const handleSelectArtist = useCallback((id: string | null, shouldFly: boolean = false) => {
     setSelectedArtistId(id);
+    if (id) {
+      setSelectedContinentId(null);
+    }
     if (id && shouldFly && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
-  };
+  }, []);
+
+  // Continent selection (clears artist selection to maintain sync)
+  const handleSelectContinent = useCallback((continentId: number | null) => {
+    setSelectedContinentId(continentId);
+    if (continentId !== null) {
+      setSelectedArtistId(null);
+    }
+  }, []);
 
   const handleTogglePreview = (artist: AtlasNode) => {
     if (activeAudioArtist?.id === artist.id) {
@@ -109,7 +121,7 @@ export const App: React.FC = () => {
   const activeAudioArtistRef = useRef(activeAudioArtist);
   activeAudioArtistRef.current = activeAudioArtist;
 
-  // Global keyboard shortcuts (Escape to deselect artist, Space to toggle active audio preview)
+  // Global keyboard shortcuts (Escape to deselect or close modal, Space to toggle active audio preview)
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -120,7 +132,14 @@ export const App: React.FC = () => {
           target.isContentEditable);
 
       if (e.key === 'Escape') {
-        setSelectedArtistId(null);
+        if (showAbout) {
+          setShowAbout(false);
+          return;
+        }
+        if (!isInputFocused) {
+          setSelectedArtistId(null);
+          setSelectedContinentId(null);
+        }
         return;
       }
 
@@ -133,7 +152,7 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [showAbout]);
 
   if (loading) {
     return (
@@ -147,7 +166,7 @@ export const App: React.FC = () => {
     );
   }
 
-  if (error || !data || !graph) {
+  if (error || !data) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4 text-center px-4">
         <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 max-w-md">
@@ -160,14 +179,17 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#07090e] select-none">
-      {/* WebGL Sigma Canvas */}
+      {/* WebGL2 Cosmograph Canvas */}
       <AtlasCanvas
         ref={canvasRef}
-        graph={graph}
+        nodes={data.nodes}
+        edges={data.edges}
+        nodeIndexMap={nodeIndexMap}
+        continentIndicesMap={continentIndicesMap}
+        neighborMap={neighborMap}
         selectedNodeId={selectedArtistId}
         onSelectNode={handleSelectArtist}
         selectedContinentId={selectedContinentId}
-        hoveredContinentId={hoveredContinentId}
       />
 
       {/* Sleek Floating Top Navigation Island */}
@@ -180,9 +202,6 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="font-extrabold text-xs sm:text-sm tracking-wider text-white">
               MUSIC ATLAS
-            </span>
-            <span className="hidden lg:inline-block text-[11px] font-mono text-slate-400">
-              {data.metadata.nodeCount.toLocaleString()} artists &bull; {data.metadata.edgeCount.toLocaleString()} bridges
             </span>
           </div>
         </div>
@@ -201,7 +220,7 @@ export const App: React.FC = () => {
           <ControlHUD
             continents={data.continents}
             selectedContinentId={selectedContinentId}
-            onSelectContinent={setSelectedContinentId}
+            onSelectContinent={handleSelectContinent}
             hoveredContinentId={hoveredContinentId}
             onHoverContinent={setHoveredContinentId}
           />
@@ -285,12 +304,12 @@ export const App: React.FC = () => {
               About Music Atlas
             </h3>
             <p className="text-sm text-slate-300 leading-relaxed mb-4">
-              <strong>Music Atlas</strong> is an autonomous 2D spatial network visualization of the global music streaming landscape, powered by empirical EveryNoise taxonomy ingestion and public YouTube Music human community curations.
+              <strong>Music Atlas</strong> is an interactive WebGL2 spatial network visualization of the global music streaming landscape, powered by empirical EveryNoise taxonomy ingestion and public YouTube Music human community curations.
             </p>
             <ul className="text-xs text-slate-300 space-y-2 mb-6 list-disc pl-4 font-normal">
               <li><strong>Zero Developer Selection Bias:</strong> Systematic EveryNoise genre taxonomy ingestion spanning thousands of micro-genres and underground scenes.</li>
               <li><strong>Universal Empirical Sizing:</strong> Artist nodes sized strictly proportional to public YouTube Music subscriber counts.</li>
-              <li><strong>Spiderweb Filaments:</strong> Inward-curved Bézier crossover bridges derived from real multi-artist human playlist co-occurrences.</li>
+              <li><strong>Spiderweb Filaments:</strong> Crossover bridges derived from real multi-artist human playlist co-occurrences rendered smoothly in WebGL2 GPU shaders.</li>
               <li><strong>Adaptive Focus Mode:</strong> Clicking any artist reveals their top 6 to 20 most prominent connections with relative affinity bars.</li>
               <li><strong>Multi-Subgenre Tagging:</strong> Preserves the top 3 most prominent subgenres per artist with audio preview streams.</li>
             </ul>

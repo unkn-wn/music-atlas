@@ -39,14 +39,18 @@ export interface AtlasNode {
   deezerUrl?: string;
   totalPlaylists?: number;
   topCrossovers?: CrossoverNeighbor[];
+  [key: string]: any;
 }
 
 export interface AtlasEdge {
   source: string;
   target: string;
+  sourceIndex?: number;
+  targetIndex?: number;
   weight: number;
   size: number;
   isBridge?: boolean;
+  [key: string]: any;
 }
 
 export interface Continent {

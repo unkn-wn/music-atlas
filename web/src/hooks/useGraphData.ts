@@ -1,11 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Graph from 'graphology';
-import { AtlasGraphBundle, ArtistDetail } from '../types/atlas';
-import { hexToRgba } from '../utils/color';
+import { AtlasGraphBundle, AtlasNode, AtlasEdge, ArtistDetail } from '../types/atlas';
+
+/**
+ * Optimizes Deezer avatar URLs:
+ * - Downsamples 1000x1000 avatars to 64x64 thumbnails to prevent GPU texture exhaustion
+ * - Strips Deezer default placeholder hash (d41d8cd98f00b204e9800998ecf8427e)
+ */
+function sanitizeAvatarUrl(url: string | undefined): string {
+  if (!url || url.includes('d41d8cd98f00b204e9800998ecf8427e')) return '';
+  let clean = url.trim();
+  if (clean.startsWith('//')) clean = 'https:' + clean;
+  if (clean.includes('dzcdn.net')) {
+    clean = clean.replace(/\d+x\d+-/, '64x64-');
+  }
+  return clean;
+}
 
 export function useGraphData() {
   const [data, setData] = useState<AtlasGraphBundle | null>(null);
-  const [graph, setGraph] = useState<Graph | null>(null);
+  const [nodeMap, setNodeMap] = useState<Map<string, AtlasNode>>(new Map());
+  const [nodeIndexMap, setNodeIndexMap] = useState<Map<string, number>>(new Map());
+  const [continentIndicesMap, setContinentIndicesMap] = useState<Map<number, number[]>>(new Map());
+  const [neighborMap, setNeighborMap] = useState<Map<string, string[]>>(new Map());
   const [detailsMap, setDetailsMap] = useState<Record<string, ArtistDetail>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -93,50 +109,55 @@ export function useGraphData() {
           bundle.continents.forEach((c) => continentNames.set(c.id, c.name));
         }
 
-        // Instantiate in-memory Graphology graph
-        const g = new Graph({ type: 'undirected', multi: false });
+        const nMap = new Map<string, AtlasNode>();
+        const nIndexMap = new Map<string, number>();
+        const cIndicesMap = new Map<number, number[]>();
 
-        // Add nodes: all nodes rendered as circles in WebGL
-        bundle.nodes.forEach((node) => {
+        // Pre-index nodes for O(1) lookups and sanitize avatar URLs
+        bundle.nodes.forEach((node, index) => {
           if (!node.continentName) {
             node.continentName = continentNames.get(node.continentId) || '';
           }
-          g.addNode(node.id, {
-            ...node,
-            type: 'circle',
-            originalImage: node.image,
-            originalSize: node.size,
-            originalColor: node.color,
-            originalLabel: node.label
-          });
+          node.image = sanitizeAvatarUrl(node.image);
+          nMap.set(node.id, node);
+          nIndexMap.set(node.id, index);
+
+          const cList = cIndicesMap.get(node.continentId) || [];
+          cList.push(index);
+          cIndicesMap.set(node.continentId, cList);
         });
 
-        // Add high-performance straight line edges with precomputed layout attributes
-        bundle.edges.forEach((edge) => {
-          if (g.hasNode(edge.source) && g.hasNode(edge.target)) {
-            if (!g.hasEdge(edge.source, edge.target)) {
-              const srcColor = (g.getNodeAttribute(edge.source, 'color') as string) || '#94a3b8';
-              const srcCont = (g.getNodeAttribute(edge.source, 'continentId') as number) || 0;
-              const dstCont = (g.getNodeAttribute(edge.target, 'continentId') as number) || 0;
+        // Filter valid edges to prevent orphaned link rendering crashes in WebGL
+        const validEdges: AtlasEdge[] = [];
+        const nbrMap = new Map<string, string[]>();
 
-              g.addEdge(edge.source, edge.target, {
-                ...edge,
-                type: 'line',
-                originalSize: edge.size || 1,
-                srcCont,
-                dstCont,
-                defaultColor: hexToRgba(srcColor, 0.12)
-              });
-            }
+        bundle.edges.forEach((edge) => {
+          if (nMap.has(edge.source) && nMap.has(edge.target)) {
+            const sourceIndex = nIndexMap.get(edge.source) ?? 0;
+            const targetIndex = nIndexMap.get(edge.target) ?? 0;
+            edge.sourceIndex = sourceIndex;
+            edge.targetIndex = targetIndex;
+            validEdges.push(edge);
+
+            // Populate adjacency list
+            const sNbrs = nbrMap.get(edge.source) || [];
+            sNbrs.push(edge.target);
+            nbrMap.set(edge.source, sNbrs);
+
+            const tNbrs = nbrMap.get(edge.target) || [];
+            tNbrs.push(edge.source);
+            nbrMap.set(edge.target, tNbrs);
           }
         });
 
-        // Free edge objects from bundle before setting React state to prevent double-retention in memory
-        bundle.edges = [];
+        bundle.edges = validEdges;
 
         if (isMounted) {
           setData(bundle);
-          setGraph(g);
+          setNodeMap(nMap);
+          setNodeIndexMap(nIndexMap);
+          setContinentIndicesMap(cIndicesMap);
+          setNeighborMap(nbrMap);
           setLoading(false);
         }
       } catch (err: any) {
@@ -154,6 +175,15 @@ export function useGraphData() {
     };
   }, []);
 
-  return { data, graph, detailsMap, loading, error, loadContinentDetails };
+  return {
+    data,
+    nodeMap,
+    nodeIndexMap,
+    continentIndicesMap,
+    neighborMap,
+    detailsMap,
+    loading,
+    error,
+    loadContinentDetails
+  };
 }
-

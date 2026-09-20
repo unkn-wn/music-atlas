@@ -299,9 +299,7 @@ html, body, #root {
 .cursor-pointer { cursor: pointer; }
 .cursor-grab { cursor: grab; }
 .cursor-grabbing { cursor: grabbing; }
-
-.overflow-hidden { overflow: hidden; }
-.overflow-y-auto { overflow-y: auto; }
+.active\:cursor-grabbing:active { cursor: grabbing; }
 
 .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
 .shadow-md { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
@@ -431,9 +429,37 @@ input[type="range"]::-webkit-slider-thumb:hover {
   animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* Sigma Canvas Layering: ensure hover WebGL fill sits behind 2D labels and hovers avatars */
-.sigma-hoverNodes { z-index: 1; }
-.sigma-labels { z-index: 2; }
-.sigma-hovers { z-index: 3; }
-.sigma-mouse { z-index: 4; }
+/* Cosmograph Labels: Strip dark pill boxes and restore crisp floating typography */
+[class*="cosmographLabel"],
+[class*="style_module_cosmographLabel"],
+.css-label {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, -apple-system, sans-serif !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.9) !important;
+}
+
+.cosmograph-hover-label {
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, -apple-system, sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #ffffff !important;
+  background: rgba(10, 15, 26, 0.88) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 6px !important;
+  padding: 4px 10px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+  z-index: 50 !important;
+}
+
 

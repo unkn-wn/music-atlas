@@ -435,7 +435,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
   animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* Cosmograph Labels: Strip dark pill boxes and restore crisp floating typography */
+/* Cosmograph Labels: Strip dark pill boxes, ensure non-clickable and layered on top above hover rings */
 [class*="cosmographLabel"],
 [class*="style_module_cosmographLabel"],
 .css-label {
@@ -449,6 +449,10 @@ input[type="range"]::-webkit-slider-thumb:hover {
   font-weight: 700 !important;
   letter-spacing: 0.02em !important;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.9) !important;
+  pointer-events: none !important;
+  cursor: default !important;
+  user-select: none !important;
+  z-index: 20 !important;
 }
 
 

@@ -113,6 +113,10 @@ export function useGraphData() {
         const nIndexMap = new Map<string, number>();
         const cIndicesMap = new Map<number, number[]>();
 
+        // Sort nodes by size ascending so larger artists have higher indices.
+        // In Cosmos WebGL and the GPU picking buffer, higher index = nearer / drawn on top = clickable & hoverable first!
+        bundle.nodes.sort((a, b) => ((a.size ?? 1.1) - (b.size ?? 1.1)) || a.id.localeCompare(b.id));
+
         // Pre-index nodes for O(1) lookups and sanitize avatar URLs
         bundle.nodes.forEach((node, index) => {
           if (!node.continentName) {

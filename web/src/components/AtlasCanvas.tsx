@@ -88,26 +88,19 @@ function getAvatarImage(rawUrl: string | undefined | null, onLoaded?: () => void
  * Proportional node sizing algorithm calibrated to reference ground truth:
  * Maps the subscriber power curve from atlas-graph.json (raw 1.1 to 14.5)
  * into authentic screen diameters matching Sigma:
- *   delta = Math.max(0, raw - 1.1)
- *   diameter = 7.0 + delta * 5.0 + Math.pow(delta, 1.55) * 0.42
  *
  * Base / fully zoomed out:
- * - Underground (1k subs, raw 1.1): 7.0px (crisp, elegant starry dots)
- * - 30k subs (Beach Fossils, raw 1.9): 11.3px (clearly visible, not microscopic)
- * - 70k subs (cults, raw 2.5): 14.7px
- * - 300k subs (Beach House, raw 4.1): 24.3px
+ * - Underground (1k subs, raw 1.1): 3.5px (2x smaller than 7.0px when fully zoomed out for clean cosmic density)
+ * - 30k subs (Beach Fossils, raw 1.9): 9.4px
+ * - 70k subs (cults, raw 2.5): 13.9px
+ * - 300k subs (Beach House, raw 4.1): 24.3px (landmark anchor preserved)
  * - 900k subs (Cigarettes After Sex, raw 5.9): 35.8px
  * - 3M subs (Gorillaz, raw 8.5): 53.3px
  * - 4M subs (Future, raw 9.1): 57.5px
  * - 24M subs (Drake, raw 14.5): 97.5px (~2x superstar anchor)
  *
- * When zoomed in (~1.7x, matching the Beach House selection screenshot):
- * - Beach Fossils: ~19px
- * - cults: ~25px
- * - Beach House: ~41px (disc) / ~50px (outer ring)
- * - Cigarettes After Sex: ~61px
- * - Gorillaz: ~91px (~2.2x Beach House, exactly matching screenshot)
- * - Drake: ~166px
+ * When zoomed in:
+ * - Smaller artists smoothly scale back up to their full ~7px+ sizing via getZoomScale, preserving legibility.
  */
 export function getArtistNodeDiameter(rawSize: number | undefined | null): number {
   const raw = rawSize ?? 1.1;
@@ -184,16 +177,39 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     }));
   }, [edges, nodeIndexMap]);
 
-  // Dynamic zoom scale calculator: smoothly scales points up on zoom-in and down on zoom-out
+  // Dynamic zoom scale calculator:
+  // - Starts scaling down earlier (at relativeZoom = 2.2 as camera pulls back from close-up)
+  // - At full galaxy view (relativeZoom = 1.0), nodes are cleanly scaled down (~0.55x) to eliminate center crowding
+  // - Deep space zoom-out scales smoothly down to 0.15x
+  // - Scaled in (relativeZoom > 2.2) scales smoothly up to 3.5x for rich close-up detail
   const getZoomScale = useCallback((cosmo: any) => {
     const currentZoom = cosmo?.getZoomLevel?.();
     if (!currentZoom || !Number.isFinite(currentZoom)) return 1.0;
-    if (!initialZoomRef.current || initialZoomRef.current <= 0) {
-      initialZoomRef.current = currentZoom;
-    }
-    const baseZoom = initialZoomRef.current || currentZoom || 0.35;
+    const baseZoom = initialZoomRef.current || 0.165;
     const relativeZoom = currentZoom / baseZoom;
-    return Math.min(3.5, Math.max(0.6, Math.pow(Math.max(0.2, relativeZoom), 0.45)));
+
+    // Transition threshold: starts scaling down earlier (at 2.2x base galaxy zoom)
+    const zoomPivot = 2.2;
+    const normalizedRatio = relativeZoom / zoomPivot;
+
+    if (normalizedRatio >= 1.0) {
+      // Scaled in close-up: smoothly scales up to 3.5x for avatar detail
+      return Math.min(3.5, Math.pow(normalizedRatio, 0.45));
+    }
+
+    // Scaled out (starts earlier as you zoom out towards & beyond galaxy view):
+    return Math.max(0.15, Math.pow(normalizedRatio, 0.75));
+  }, []);
+
+  // Strict zoom limits configurator: allows zooming out deep into space, and caps max zoom in
+  const applyZoomLimits = useCallback((baseZoom?: number) => {
+    const cosmo = cosmographRef.current as any;
+    const behavior = cosmo?._cosmos?.zoomInstance?.behavior;
+    if (!behavior) return;
+    const current = baseZoom || initialZoomRef.current || cosmo.getZoomLevel?.() || 0.165;
+    const minZoom = Math.max(0.01, current * 0.05);
+    const maxZoom = Math.max(15.0, current * 45);
+    behavior.scaleExtent([minZoom, maxZoom]);
   }, []);
 
   // High-performance 2D avatar renderer strictly synced to visible labels.
@@ -226,6 +242,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       const scale = getZoomScale(cosmo);
       if (Math.abs((cosmo._cosmos.config.pointSizeScale ?? 1) - scale) > 0.005) {
         cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
+        cosmo._cosmos.requestRender();
       }
     }
 
@@ -291,8 +308,20 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       }
     }
 
-    // Draw circular avatars inside node discs for all visible artists
-    for (const id of visibleNodeIds) {
+    // 1. Sort visible nodes by size ascending so larger artists & avatars are drawn on top
+    const sortedVisibleIds = Array.from(visibleNodeIds).sort(
+      (a, b) => (nodeIndexMap.get(a) ?? 0) - (nodeIndexMap.get(b) ?? 0)
+    );
+
+    interface LabelToDraw {
+      text: string;
+      sx: number;
+      yOffset: number;
+    }
+    const labelsToDraw: LabelToDraw[] = [];
+
+    // Pass 1: Draw avatars and proportional outer rings
+    for (const id of sortedVisibleIds) {
       const idx = nodeIndexMap.get(id);
       if (idx === undefined) continue;
       const node = nodes[idx];
@@ -346,24 +375,32 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         ctx.restore();
       }
 
-      // Artist name label text beneath hovered or selected node with strong halo outline (only if not already shown by Cosmograph)
+      // Collect labels to draw in Pass 2 strictly on top above hover rings
       if (isHovered || id === currentSelectedId) {
         const hasCssLabel = cssLabels?.get(id)?.getVisibility() === true;
         const labelText = node.label || '';
         if (labelText && !hasCssLabel) {
-          const yOffset = sy + radius + 8;
-          ctx.save();
-          ctx.font = '700 12px "Plus Jakarta Sans", sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'top';
-          ctx.lineWidth = 3.5;
-          ctx.strokeStyle = 'rgba(7, 9, 14, 0.95)';
-          ctx.strokeText(labelText, sx, yOffset);
-          ctx.fillStyle = '#ffffff';
-          ctx.fillText(labelText, sx, yOffset);
-          ctx.restore();
+          labelsToDraw.push({
+            text: labelText,
+            sx,
+            yOffset: sy + radius + 8
+          });
         }
       }
+    }
+
+    // Pass 2: Draw text labels strictly on top above all hover rings
+    for (const l of labelsToDraw) {
+      ctx.save();
+      ctx.font = '700 12px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = 'rgba(7, 9, 14, 0.95)';
+      ctx.strokeText(l.text, l.sx, l.yOffset);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(l.text, l.sx, l.yOffset);
+      ctx.restore();
     }
 
     ctx.restore();
@@ -580,6 +617,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       onZoom: () => {
         const cosmo = cosmographRef.current as any;
         if (cosmo?._cosmos) {
+          applyZoomLimits();
           const scale = getZoomScale(cosmo);
           cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
           cosmo._cosmos.requestRender();
@@ -589,6 +627,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       onZoomEnd: () => {
         const cosmo = cosmographRef.current as any;
         if (cosmo?._cosmos) {
+          applyZoomLimits();
           const scale = getZoomScale(cosmo);
           cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
           cosmo._cosmos.requestRender();
@@ -608,16 +647,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         } else {
           applySelectionState(null);
           onSelectNodeRef.current(null);
-        }
-      },
-      onLabelClick: (index: number, id: string) => {
-        const nMap = nodeIndexMapRef.current;
-        const allNodes = nodesRef.current;
-        const idx = index !== undefined ? index : (id ? nMap.get(id) : undefined);
-        const node = idx !== undefined ? allNodes[idx] : undefined;
-        if (node) {
-          applySelectionState(node.id);
-          onSelectNodeRef.current(node.id);
         }
       }
     });
@@ -652,21 +681,32 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       cosmographRef.current = cosmograph;
     }
 
-    // Capture initial zoom after Cosmograph's fitViewOnInit completes
-    const initialFitTimer = setTimeout(() => {
-      if (!isCancelled && cosmographRef.current) {
-        const zoom = cosmographRef.current.getZoomLevel();
-        if (zoom && zoom > 0) {
-          initialZoomRef.current = zoom;
+    // Capture initial fitted zoom after Cosmograph's async Cosmos initialization completes
+    let fitAttempts = 0;
+    let initialFitTimer: any = null;
+    const checkFit = () => {
+      if (isCancelled || !cosmographRef.current) return;
+      const cosmo = cosmographRef.current as any;
+      if (cosmo?._cosmos?.zoomInstance?.behavior) {
+        const currentZoom = cosmo.getZoomLevel?.();
+        let fittedZoom = currentZoom;
+        if (!fittedZoom || Math.abs(fittedZoom - 1.0) < 0.01) {
+          cosmographRef.current.fitView(0, 0.1);
+          fittedZoom = cosmographRef.current.getZoomLevel() || 0.165;
         }
-        const cosmo = cosmographRef.current as any;
-        if (cosmo?._cosmos) {
-          cosmo._cosmos.setConfigPartial({ pointSizeScale: 1.0 });
-          cosmo._cosmos.requestRender();
-        }
+        initialZoomRef.current = fittedZoom;
+        applyZoomLimits(fittedZoom);
+
+        const scale = getZoomScale(cosmo);
+        cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
+        cosmo._cosmos.requestRender();
         scheduleDrawAvatars();
+      } else if (fitAttempts < 25) {
+        fitAttempts++;
+        initialFitTimer = setTimeout(checkFit, 50);
       }
-    }, 50);
+    };
+    initialFitTimer = setTimeout(checkFit, 50);
 
     // Initial avatar draw
     scheduleDrawAvatars();
@@ -689,22 +729,26 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         console.warn('Cosmograph cleanup warning:', err);
       });
     };
-  }, [cosmographPoints, cosmographLinks, applySelectionState, scheduleDrawAvatars]);
+  }, [cosmographPoints, cosmographLinks, applySelectionState, scheduleDrawAvatars, applyZoomLimits]);
 
-  // Imperative camera navigation handle
+  // Imperative camera navigation handle with strict zoom clamping
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
-      const cosmo = cosmographRef.current;
+      const cosmo = cosmographRef.current as any;
       if (!cosmo) return;
       const current = cosmo.getZoomLevel() ?? 1;
-      cosmo.setZoomLevel(current * 1.4, 300);
+      const extent = cosmo._cosmos?.zoomInstance?.behavior?.scaleExtent?.() ?? [0.005, 15];
+      const next = Math.min(extent[1], current * 1.4);
+      cosmo.setZoomLevel(next, 300);
       runAnimationLoop(350);
     },
     zoomOut: () => {
-      const cosmo = cosmographRef.current;
+      const cosmo = cosmographRef.current as any;
       if (!cosmo) return;
       const current = cosmo.getZoomLevel() ?? 1;
-      cosmo.setZoomLevel(current / 1.4, 300);
+      const extent = cosmo._cosmos?.zoomInstance?.behavior?.scaleExtent?.() ?? [0.005, 15];
+      const next = Math.max(extent[0], current / 1.4);
+      cosmo.setZoomLevel(next, 300);
       runAnimationLoop(350);
     },
     resetView: () => {
@@ -716,8 +760,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       cosmographRef.current?.fitView(600, 0.1);
       runAnimationLoop(650);
       setTimeout(() => {
-        const c = cosmographRef.current;
-        if (c) initialZoomRef.current = c.getZoomLevel() || 0.35;
+        const c = cosmographRef.current as any;
+        if (c) {
+          const z = c.getZoomLevel() || initialZoomRef.current || 0.165;
+          initialZoomRef.current = z;
+          applyZoomLimits(z);
+        }
       }, 650);
     },
     flyToNode: (nodeId: string) => {
@@ -773,7 +821,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
           left: 0,
           width: '100%',
           height: '100%',
-          pointerEvents: 'none'
+          pointerEvents: 'none',
+          zIndex: 10
         }}
       />
     </div>

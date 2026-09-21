@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { X, Play, Pause, ExternalLink, Users, Disc3, ArrowRight } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
@@ -30,6 +30,49 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
   const accentColor = artist.color || DEFAULT_ACCENT_COLOR;
   const [loadedArtistId, setLoadedArtistId] = useState<string | null>(null);
   const isImageLoaded = loadedArtistId === artist.id;
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+
+  const touchStartYRef = useRef<number | null>(null);
+  const currentDragDeltaRef = useRef<number>(0);
+  const wasDraggedRef = useRef<boolean>(false);
+  const [dragOffset, setDragOffset] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartYRef.current = e.touches[0].clientY;
+    currentDragDeltaRef.current = 0;
+    wasDraggedRef.current = false;
+    setIsDragging(true);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartYRef.current === null) return;
+    const delta = e.touches[0].clientY - touchStartYRef.current;
+    currentDragDeltaRef.current = delta;
+    if (Math.abs(delta) > 8) {
+      wasDraggedRef.current = true;
+    }
+    setDragOffset(delta);
+  };
+
+  const handleTouchEnd = () => {
+    if (touchStartYRef.current === null) return;
+    const deltaY = currentDragDeltaRef.current;
+    touchStartYRef.current = null;
+    currentDragDeltaRef.current = 0;
+    setIsDragging(false);
+    setDragOffset(0);
+
+    if (deltaY < -40) {
+      setIsExpanded(true);
+    } else if (deltaY > 40) {
+      if (isExpanded) {
+        setIsExpanded(false);
+      } else {
+        onClose();
+      }
+    }
+  };
 
   const isCurrentPlaying = isPlayingPreview && currentlyPlayingId === artist.id;
 
@@ -82,19 +125,152 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
     return url;
   }, [artist.image]);
 
+  const mobileSheetHeight = useMemo(() => {
+    if (typeof window === 'undefined') return '290px';
+    if (!isDragging) {
+      return isExpanded ? '82dvh' : '290px';
+    }
+    const baseH = isExpanded ? window.innerHeight * 0.82 : 290;
+    const draggedH = Math.max(160, Math.min(window.innerHeight * 0.88, baseH - dragOffset));
+    return `${Math.round(draggedH)}px`;
+  }, [isDragging, isExpanded, dragOffset]);
+
   return (
-    <div className="glass-panel w-80 sm:w-96 shadow-2xl flex flex-col h-[calc(100vh-6rem)] overflow-hidden pointer-events-auto border-l border-white/15">
-      {/* Header Image & Close Button with fixed 1:1 square ratio for zero-layout-shift skeleton and full portrait display */}
+    <div
+      style={{
+        height: mobileSheetHeight
+      }}
+      className={`glass-panel w-full md:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-6rem)] ${
+        isDragging ? 'transition-none' : 'transition-[height] duration-300 ease-out'
+      } overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15`}
+    >
+      {/* Mobile Drag Handle */}
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onClick={() => {
+          if (wasDraggedRef.current) return;
+          setIsExpanded(!isExpanded);
+        }}
+        className="md:hidden pt-2 pb-0.5 flex flex-col items-center justify-center cursor-pointer select-none shrink-0 touch-none"
+      >
+        <div className="w-8 h-1 rounded-full bg-white/25" />
+      </div>
+
+      {/* Mobile Compact Artist Header */}
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        className="md:hidden px-4 pt-1 pb-2.5 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none touch-none"
+      >
+        <div
+          className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
+          onClick={() => {
+            if (wasDraggedRef.current) return;
+            setIsExpanded(!isExpanded);
+          }}
+        >
+          {/* Avatar Circle with accent ring */}
+          <div
+            className="w-11 h-11 rounded-full shrink-0 overflow-hidden flex items-center justify-center bg-white/5 border-2 shadow-md"
+            style={{ borderColor: accentColor }}
+          >
+            <img
+              src={sidebarImageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
+              alt={artist.label}
+              referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                if (artist.image && target.src !== artist.image) {
+                  target.src = artist.image;
+                } else {
+                  target.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80';
+                }
+              }}
+            />
+          </div>
+
+          {/* Artist Name & Stats */}
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm sm:text-base font-bold text-white tracking-tight truncate leading-tight">
+              {artist.label}
+            </h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-xs text-slate-400 font-mono font-medium">
+                {subscriberDisplay} subs
+              </span>
+              {subgenres.length > 0 && (
+                <span
+                  style={{
+                    backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BG_PCT}%, transparent)`,
+                    borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                  }}
+                  className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200 truncate max-w-[120px]"
+                >
+                  {subgenres[0]}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Buttons: Quick Play & Close */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => {
+              if (hasPreview) onTogglePreview(artist);
+            }}
+            disabled={!hasPreview}
+            style={{
+              ...(hasPreview
+                ? { backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)` }
+                : {})
+            }}
+            className={`w-9 h-9 rounded-full font-bold shadow-md transition-transform flex items-center justify-center shrink-0 ${
+              hasPreview
+                ? "hover:brightness-110 text-white active:scale-95 cursor-pointer"
+                : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
+            }`}
+            title={
+              !hasPreview
+                ? "No audio preview available"
+                : isCurrentPlaying
+                ? `Pause Preview: ${artist.label}`
+                : `Play 30s Audio Preview: ${artist.label}`
+            }
+          >
+            {isCurrentPlaying ? (
+              <Pause className="w-4 h-4 text-white fill-white" fill="white" color="white" />
+            ) : (
+              <Play className="w-4 h-4 text-white fill-white ml-0.5" fill="white" color="white" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-xl bg-black/60 hover:bg-black/80 border border-white/15 text-slate-300 hover:text-white transition-colors flex items-center justify-center cursor-pointer shadow-md"
+            title="Close Drawer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Desktop Header Image with max-h-72 aspect-square */}
       <div
         style={{
           width: '100%',
-          aspectRatio: '1 / 1',
           position: 'relative',
           overflow: 'hidden',
           backgroundColor: '#07090e',
           flexShrink: 0
         }}
-        className="aspect-square border-b border-white/10"
+        className="hidden md:block aspect-square max-h-72 border-b border-white/10"
       >
         {/* High-visibility Skeleton placeholder while artist picture is loading (no fading) */}
         {!isImageLoaded && (
@@ -234,7 +410,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           }}
           className={`w-12 h-12 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center shrink-0 ${
             hasPreview
-              ? "hover:brightness-110 text-black active:scale-95 cursor-pointer"
+              ? "hover:brightness-110 text-white active:scale-95 cursor-pointer"
               : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
           }`}
           title={
@@ -247,9 +423,9 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         >
           <div className="w-5 h-5 flex items-center justify-center shrink-0">
             {isCurrentPlaying ? (
-              <Pause className="w-5 h-5 fill-current shrink-0" color='white' fill='white' />
+              <Pause className="w-5 h-5 fill-white text-white shrink-0" fill="white" color="white" />
             ) : (
-              <Play className="w-5 h-5 fill-current shrink-0" color='white' fill='white' />
+              <Play className="w-5 h-5 fill-white text-white shrink-0 ml-0.5" fill="white" color="white" />
             )}
           </div>
         </button>
@@ -283,9 +459,17 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
       </div>
 
       {/* Body Content */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        {/* Metrics */}
-        <div className="text-xs">
+      <div
+        style={{
+          touchAction: 'pan-y',
+          overscrollBehaviorY: 'contain',
+          WebkitOverflowScrolling: 'touch',
+          paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))'
+        }}
+        className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-3 sm:gap-4"
+      >
+        {/* Metrics (Desktop only; displayed in mobile compact header) */}
+        <div className="hidden md:block text-xs">
           <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex items-center gap-2.5">
             <Users className="w-4 h-4 text-cyan-400 shrink-0" />
             <div className="min-w-0">

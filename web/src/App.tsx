@@ -85,12 +85,9 @@ export const App: React.FC = () => {
     };
   }, [activeAudioArtist, detailsMap]);
 
-  // Immediate, synchronous artist selection (clears continent filter to maintain sync)
+  // Immediate, synchronous artist selection
   const handleSelectArtist = useCallback((id: string | null, shouldFly: boolean = false) => {
     setSelectedArtistId(id);
-    if (id) {
-      setSelectedContinentId(null);
-    }
     if (id && shouldFly && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
@@ -120,7 +117,7 @@ export const App: React.FC = () => {
   const activeAudioArtistRef = useRef(activeAudioArtist);
   activeAudioArtistRef.current = activeAudioArtist;
 
-  // Global keyboard shortcuts (Escape to deselect or close modal, Space to toggle active audio preview)
+  // Global keyboard shortcuts (Escape to deselect artist or close modal, Space to toggle active audio preview)
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -137,7 +134,6 @@ export const App: React.FC = () => {
         }
         if (!isInputFocused) {
           setSelectedArtistId(null);
-          setSelectedContinentId(null);
         }
         return;
       }
@@ -192,21 +188,22 @@ export const App: React.FC = () => {
       />
 
       {/* Sleek Floating Top Navigation Island */}
-      <header className="absolute top-4 left-4 right-4 z-50 flex items-center justify-between gap-4 pointer-events-none">
+      <header
+        style={{ top: 'max(1rem, env(safe-area-inset-top))' }}
+        className="absolute left-4 right-4 z-50 flex items-center justify-between gap-2 sm:gap-4 pointer-events-none"
+      >
         {/* Brand Logo & Stats */}
-        <div className="glass-panel px-3.5 py-2 flex items-center gap-2.5 shadow-xl pointer-events-auto shrink-0">
+        <div className="glass-panel h-10 w-10 sm:w-auto p-0 sm:px-3.5 flex items-center justify-center sm:justify-start gap-2 sm:gap-2.5 shadow-xl pointer-events-auto shrink-0">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-emerald-500 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20">
-            <Radio className="w-3.5 h-3.5 text-black" strokeWidth={2.5} />
+            <Radio className="w-3.5 h-3.5 text-black stroke-[2.5]" />
           </div>
-          <div className="flex items-center gap-2">
-            <span className="font-extrabold text-xs sm:text-sm tracking-wider text-white">
-              MUSIC ATLAS
-            </span>
-          </div>
+          <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap">
+            MUSIC ATLAS
+          </span>
         </div>
 
-        {/* Global Search Bar */}
-        <div className="pointer-events-auto flex-1 max-w-sm sm:max-w-md">
+        {/* Global Search Bar (Expands on Mobile) */}
+        <div className="pointer-events-auto flex-1 min-w-0 max-w-none sm:max-w-md">
           <SearchBar
             nodes={data.nodes}
             onSelectArtist={(artistId) => handleSelectArtist(artistId, true)}
@@ -214,17 +211,29 @@ export const App: React.FC = () => {
           />
         </div>
 
-        {/* Minimal Control HUD */}
-        <div className="pointer-events-auto flex items-center gap-2">
+        {/* Minimal Control HUD (Desktop) */}
+        <div className="hidden sm:flex pointer-events-auto items-center gap-2">
           <ControlHUD
             continents={data.continents}
             selectedContinentId={selectedContinentId}
             onSelectContinent={handleSelectContinent}
+            align="right"
           />
 
           <button
             onClick={() => setShowAbout(true)}
-            className="glass-panel p-2 hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
+            className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
+            title="About Music Atlas"
+          >
+            <Info className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Mobile Info Button */}
+        <div className="flex sm:hidden pointer-events-auto items-center">
+          <button
+            onClick={() => setShowAbout(true)}
+            className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
             title="About Music Atlas"
           >
             <Info className="w-4 h-4" />
@@ -232,10 +241,24 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Floating Minimal Zoom & Reset View Controls */}
+      {/* Mobile Floating Continents Pill (Below Header on Left) */}
+      <div
+        style={{ top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)' }}
+        className="fixed left-4 z-40 sm:hidden pointer-events-auto"
+      >
+        <ControlHUD
+          continents={data.continents}
+          selectedContinentId={selectedContinentId}
+          onSelectContinent={handleSelectContinent}
+          align="left"
+        />
+      </div>
+
+      {/* Floating Zoom & Reset View Controls */}
+      {/* Desktop: Bottom-Left */}
       <div
         style={{ position: 'fixed', bottom: '24px', left: '24px', zIndex: 30 }}
-        className="pointer-events-auto flex flex-col gap-1.5 shadow-2xl"
+        className="hidden sm:flex pointer-events-auto flex-col gap-1.5 shadow-2xl"
       >
         <button
           onClick={() => canvasRef.current?.zoomIn()}
@@ -260,41 +283,72 @@ export const App: React.FC = () => {
         </button>
       </div>
 
-      {/* Floating Artist Inspector Drawer (Slide-over on Right) */}
-      {selectedArtist && (
-        <div
-          style={{ position: 'fixed', top: '72px', bottom: '24px', right: '24px', left: 'auto', width: 'auto', zIndex: 40 }}
-          className="pointer-events-none flex justify-end"
+      {/* Mobile: Top-Right Beneath Header */}
+      <div
+        style={{ position: 'fixed', top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)', right: '16px', zIndex: 30 }}
+        className="flex sm:hidden pointer-events-auto flex-col gap-1.5 shadow-2xl"
+      >
+        <button
+          onClick={() => canvasRef.current?.zoomIn()}
+          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          title="Zoom In"
         >
-          <ArtistDrawer
-            key={selectedArtist.id}
-            artist={selectedArtist}
-            onClose={() => setSelectedArtistId(null)}
-            onSelectNeighbor={(id) => handleSelectArtist(id, true)}
-            isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
-            onTogglePreview={handleTogglePreview}
-            currentlyPlayingId={activeAudioArtist?.id || null}
-          />
-        </div>
-      )}
+          <ZoomIn className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => canvasRef.current?.zoomOut()}
+          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          title="Zoom Out"
+        >
+          <ZoomOut className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => canvasRef.current?.resetView()}
+          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          title="Reset Map View"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
-      {/* Persistent Audio Player Bar (Bottom Center) */}
-      {activeAudioArtist && (
-        <div
-          style={{ position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)', zIndex: 45 }}
-          className="pointer-events-none px-4 w-full max-w-2xl flex justify-center"
-        >
-          <AudioPlayerBar
-            currentArtist={mergedAudioArtist}
-            isPlaying={isPlayingAudio}
-            onTogglePlay={() => setIsPlayingAudio(!isPlayingAudio)}
-          />
-        </div>
-      )}
+      {/* Bottom Container for Mobile Sheet & Persistent Audio Player */}
+      <div className="fixed z-[60] pointer-events-none bottom-0 left-0 right-0 w-full flex flex-col items-center justify-end md:contents">
+        {/* Persistent Audio Player Bar */}
+        {activeAudioArtist && (
+          <div
+            style={{
+              marginBottom: selectedArtist ? '8px' : 'max(12px, env(safe-area-inset-bottom))'
+            }}
+            className="pointer-events-none px-3 sm:px-4 w-full max-w-2xl flex justify-center transition-[margin] duration-300 ease-out md:fixed md:bottom-6 md:left-1/2 md:-translate-x-1/2 md:mb-0 md:z-[60]"
+          >
+            <AudioPlayerBar
+              currentArtist={mergedAudioArtist}
+              isPlaying={isPlayingAudio}
+              onTogglePlay={() => setIsPlayingAudio(!isPlayingAudio)}
+              onSelectArtist={(id) => handleSelectArtist(id, true)}
+            />
+          </div>
+        )}
+
+        {/* Floating Artist Inspector: Desktop Slide-over Drawer & Mobile Native Bottom Sheet */}
+        {selectedArtist && (
+          <div className="pointer-events-none w-full md:w-auto md:fixed md:top-[72px] md:bottom-6 md:right-6 md:z-[60] flex justify-center md:justify-end">
+            <ArtistDrawer
+              key={selectedArtist.id}
+              artist={selectedArtist}
+              onClose={() => setSelectedArtistId(null)}
+              onSelectNeighbor={(id) => handleSelectArtist(id, true)}
+              isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
+              onTogglePreview={handleTogglePreview}
+              currentlyPlayingId={activeAudioArtist?.id || null}
+            />
+          </div>
+        )}
+      </div>
 
       {/* About Modal */}
       {showAbout && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pointer-events-auto">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pointer-events-auto">
           <div className="glass-panel max-w-lg w-full p-6 shadow-2xl relative border border-white/20">
             <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-emerald-400" />

@@ -8,12 +8,14 @@ interface AudioPlayerBarProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   onClose?: () => void;
+  onSelectArtist?: (artistId: string) => void;
 }
 
 export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   currentArtist,
   isPlaying,
-  onTogglePlay
+  onTogglePlay,
+  onSelectArtist
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const activeArtistIdRef = useRef<string | null>(null);
@@ -42,6 +44,18 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     setResolvedTitle(null);
     setIsLoadingAudio(false);
   }, [currentArtist?.id]);
+
+  // Clean up audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+      }
+    };
+  }, []);
 
   // Volume & Mute control
   useEffect(() => {
@@ -158,7 +172,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const hasPreview = Boolean(currentArtist.id || currentArtist.label);
 
   return (
-    <div className="glass-panel w-full max-w-2xl px-4 py-2.5 shadow-2xl flex items-center gap-4 pointer-events-auto border border-white/15 animate-in slide-in-from-bottom duration-300">
+    <div className="glass-panel relative z-10 w-full max-w-2xl px-3 sm:px-4 py-2 sm:py-2.5 shadow-2xl flex items-center gap-2.5 sm:gap-4 pointer-events-auto border border-white/15 animate-in slide-in-from-bottom duration-300">
       <audio
         ref={audioRef}
         onTimeUpdate={handleTimeUpdate}
@@ -170,8 +184,16 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       />
 
       {/* Artist Thumbnail & Info */}
-      <div className="flex items-center gap-3 min-w-0 w-52 shrink-0">
-        <div className="relative w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-white/20 bg-slate-800">
+      <div
+        onClick={() => {
+          if (currentArtist && onSelectArtist) {
+            onSelectArtist(currentArtist.id);
+          }
+        }}
+        className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[125px] sm:max-w-none sm:w-52 shrink-0 cursor-pointer group select-none"
+        title={`View ${currentArtist.label} details`}
+      >
+        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden relative shrink-0 bg-slate-800 shadow-md group-hover:scale-105 transition-transform">
           <img
             key={currentArtist.id}
             src={currentArtist.image}
@@ -191,13 +213,13 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </div>
           )}
         </div>
-        <div className="min-w-0">
-          <div className="text-xs font-bold text-white truncate" title={resolvedTitle || currentArtist.topTrack || currentArtist.label}>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors" title={resolvedTitle || currentArtist.topTrack || currentArtist.label}>
             {resolvedTitle || currentArtist.topTrack || currentArtist.label}
           </div>
-          <div className="text-[11px] text-slate-400 truncate flex items-center gap-1">
+          <div className="text-[10px] sm:text-[11px] text-slate-400 truncate flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentArtist.color }} />
-            <span className="truncate">
+            <span className="truncate group-hover:text-slate-200 transition-colors">
               {currentArtist.label}
             </span>
           </div>
@@ -210,7 +232,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           onTogglePlay();
         }}
         disabled={isLoadingAudio}
-        className="w-10 h-10 rounded-full font-bold shadow-md transition-transform shrink-0 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
+        className="w-9 h-9 sm:w-10 sm:h-10 rounded-full font-bold shadow-md transition-transform shrink-0 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
         title={
           isLoadingAudio
             ? "Resolving audio preview..."
@@ -225,14 +247,14 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           ) : isPlaying ? (
             <Pause className="w-4 h-4 fill-current shrink-0" />
           ) : (
-            <Play className="w-4 h-4 fill-current shrink-0" />
+            <Play className="w-4 h-4 fill-current shrink-0 ml-0.5" />
           )}
         </div>
       </button>
 
       {/* Scrubber & Time */}
-      <div className="flex-1 flex items-center gap-2">
-        <span className="text-[10px] font-mono text-slate-400 w-8 text-right">
+      <div className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">
+        <span className="text-[10px] font-mono text-slate-400 w-7 sm:w-8 text-right shrink-0">
           0:{Math.floor(currentTime).toString().padStart(2, '0')}
         </span>
         <input
@@ -243,9 +265,9 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           value={progress}
           onChange={handleSeek}
           disabled={!hasPreview}
-          className="w-full"
+          className="w-full min-w-0"
         />
-        <span className="text-[10px] font-mono text-slate-400 w-8">
+        <span className="text-[10px] font-mono text-slate-400 w-7 sm:w-8 shrink-0">
           0:{Math.floor(duration).toString().padStart(2, '0')}
         </span>
       </div>
@@ -274,7 +296,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         href={currentArtist.spotifyUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="p-1.5 text-slate-400 hover:text-[#1DB954] transition-colors shrink-0"
+        className="p-1 sm:p-1.5 text-slate-400 hover:text-[#1DB954] transition-colors shrink-0"
         title="Open in Spotify"
       >
         <ExternalLink className="w-4 h-4" />

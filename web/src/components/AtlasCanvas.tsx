@@ -108,7 +108,7 @@ export function getArtistNodeDiameter(rawSize: number | undefined | null): numbe
   return 7.0 + delta * 5.0 + Math.pow(delta, 1.55) * 0.42;
 }
 
-export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
+export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
   nodes,
   edges,
   nodeIndexMap,
@@ -137,7 +137,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
   selectedNodeIdRef.current = selectedNodeId;
   const selectedContinentIdRef = useRef<number | null>(selectedContinentId);
   selectedContinentIdRef.current = selectedContinentId;
-  const initialZoomRef = useRef<number | null>(null);
+  const initialZoomRef = useRef<number>(1.0);
   const hoveredPointIndexRef = useRef<number | null>(null);
   const lastAppliedRef = useRef<{ nodeId: string | null; continentId: number | null }>({
     nodeId: null,
@@ -177,27 +177,55 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     }));
   }, [edges, nodeIndexMap]);
 
+  // Pre-index links by continent so continent selection illuminates all lines inside and connected to that continent
+  const continentLinksMap = React.useMemo(() => {
+    const map = new Map<number, number[]>();
+    const addEdge = (continentId: number, edgeIdx: number) => {
+      let list = map.get(continentId);
+      if (!list) {
+        list = [];
+        map.set(continentId, list);
+      }
+      list.push(edgeIdx);
+    };
+
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i];
+      const sIdx = edge.sourceIndex ?? nodeIndexMap.get(edge.source);
+      const tIdx = edge.targetIndex ?? nodeIndexMap.get(edge.target);
+      if (sIdx === undefined || tIdx === undefined) continue;
+      const sNode = nodes[sIdx];
+      const tNode = nodes[tIdx];
+      if (!sNode || !tNode) continue;
+
+      if (sNode.continentId) {
+        addEdge(sNode.continentId, i);
+      }
+      if (tNode.continentId && tNode.continentId !== sNode.continentId) {
+        addEdge(tNode.continentId, i);
+      }
+    }
+    return map;
+  }, [edges, nodes, nodeIndexMap]);
+  const continentLinksMapRef = useRef(continentLinksMap);
+  continentLinksMapRef.current = continentLinksMap;
+
   // Dynamic zoom scale calculator:
-  // - Starts scaling down earlier (at relativeZoom = 2.2 as camera pulls back from close-up)
-  // - At full galaxy view (relativeZoom = 1.0), nodes are cleanly scaled down (~0.55x) to eliminate center crowding
-  // - Deep space zoom-out scales smoothly down to 0.15x
-  // - Scaled in (relativeZoom > 2.2) scales smoothly up to 3.5x for rich close-up detail
+  // - Deep galaxy view scales down to clean, uncrowded ~0.15x density
+  // - Close-up zooms smoothly scale up to 3.5x for rich artist and avatar detail
   const getZoomScale = useCallback((cosmo: any) => {
     const currentZoom = cosmo?.getZoomLevel?.();
     if (!currentZoom || !Number.isFinite(currentZoom)) return 1.0;
-    const baseZoom = initialZoomRef.current || 0.165;
+    const baseZoom = 1.0;
     const relativeZoom = currentZoom / baseZoom;
 
-    // Transition threshold: starts scaling down earlier (at 2.2x base galaxy zoom)
     const zoomPivot = 2.2;
     const normalizedRatio = relativeZoom / zoomPivot;
 
     if (normalizedRatio >= 1.0) {
-      // Scaled in close-up: smoothly scales up to 3.5x for avatar detail
       return Math.min(3.5, Math.pow(normalizedRatio, 0.45));
     }
 
-    // Scaled out (starts earlier as you zoom out towards & beyond galaxy view):
     return Math.max(0.15, Math.pow(normalizedRatio, 0.75));
   }, []);
 
@@ -206,7 +234,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const cosmo = cosmographRef.current as any;
     const behavior = cosmo?._cosmos?.zoomInstance?.behavior;
     if (!behavior) return;
-    const current = baseZoom || initialZoomRef.current || cosmo.getZoomLevel?.() || 0.165;
+    const current = baseZoom || 1.0;
     const minZoom = Math.max(0.01, current * 0.05);
     const maxZoom = Math.max(15.0, current * 45);
     behavior.scaleExtent([minZoom, maxZoom]);
@@ -225,7 +253,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     const height = canvas.clientHeight;
     if (width === 0 || height === 0) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    const isMobile = width < 768;
+    const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2.0);
     const expectedWidth = Math.round(width * dpr);
     const expectedHeight = Math.round(height * dpr);
     if (canvas.width !== expectedWidth || canvas.height !== expectedHeight) {
@@ -320,6 +349,9 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     }
     const labelsToDraw: LabelToDraw[] = [];
 
+    const hasFinePointer = typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    const zoomScale = cosmo._cosmos?.config?.pointSizeScale ?? 1.0;
+
     // Pass 1: Draw avatars and proportional outer rings
     for (const id of sortedVisibleIds) {
       const idx = nodeIndexMap.get(id);
@@ -334,12 +366,10 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       // Cull offscreen points
       if (sx < -100 || sx > width + 100 || sy < -100 || sy > height + 100) continue;
 
-      const cosmoConfig = cosmo._cosmos?.config;
-      const zoomScale = cosmoConfig?.pointSizeScale ?? 1.0;
       const diameter = getArtistNodeDiameter(node.size) * zoomScale;
       const radius = diameter / 2;
       const avatarRadius = Math.max(2.0, radius - 1.2);
-      const isHovered = hoveredIdx !== null && hoveredIdx !== undefined && nodes[hoveredIdx]?.id === id;
+      const isHovered = hasFinePointer && hoveredIdx !== null && hoveredIdx !== undefined && nodes[hoveredIdx]?.id === id;
 
       if (node.image) {
         const img = getAvatarImage(node.image, () => scheduleDrawAvatarsRef.current());
@@ -481,23 +511,24 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       }
     } else if (targetContinentId !== null) {
       const continentIndices = continentIndicesMap.get(targetContinentId) || [];
+      const continentLinks = continentLinksMapRef.current.get(targetContinentId) || [];
       cosmos.setConfigPartial({
         highlightedPointIndices: continentIndices,
-        highlightedLinkIndices: void 0,
-        linkOpacity: 0.18,
+        highlightedLinkIndices: continentLinks,
+        linkOpacity: 0.25,
         linkGreyoutOpacity: 0.0,
         linkVisibilityMinTransparency: 1.0,
         linkDefaultWidth: 0.8,
       });
       if (cosmo._crossfilter) {
         cosmo._crossfilter._userSelectedPointIndices = new Set(continentIndices);
-        cosmo._crossfilter._userSelectedLinkIndices.clear();
+        cosmo._crossfilter._userSelectedLinkIndices = new Set(continentLinks);
         cosmo._crossfilter._highlightedPointIndices = new Set(continentIndices);
-        cosmo._crossfilter._highlightedLinkIndices.clear();
+        cosmo._crossfilter._highlightedLinkIndices = new Set(continentLinks);
         cosmo._crossfilter._pointsHighlightActive = true;
-        cosmo._crossfilter._linksHighlightActive = false;
+        cosmo._crossfilter._linksHighlightActive = true;
         cosmo._crossfilter._pointsUserActive = true;
-        cosmo._crossfilter._linksUserActive = false;
+        cosmo._crossfilter._linksUserActive = true;
       }
     } else {
       // Unselected state: restore delicate translucent filaments (18% opacity, hairline 0.8px, no distance cut)
@@ -558,9 +589,13 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
     // Clean DOM to prevent canvas duplication
     containerRef.current.replaceChildren();
 
+    const isMobileView = typeof window !== 'undefined' && window.innerWidth < 768;
+    const clampedPixelRatio = Math.min(window.devicePixelRatio || 1, isMobileView ? 1.5 : 2.0);
+
     const cosmograph = new Cosmograph(containerRef.current, {
       points: cosmographPoints,
       links: cosmographLinks,
+      pixelRatio: clampedPixelRatio,
       pointIdBy: 'id',
       pointXBy: 'x',
       pointYBy: 'y',
@@ -577,7 +612,7 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       fitViewDuration: 0,
       showLabels: true,
       showDynamicLabels: true,
-      showDynamicLabelsLimit: 80,
+      showDynamicLabelsLimit: isMobileView ? 35 : 80,
       showUnselectedPointLabels: false, // Hides unselected labels during artist selection so visual focus is 100% on focal artist & connections
       pointLabelBy: 'label',
       pointLabelPosition: 'below', // All dynamic labels positioned below artists (zero labels above)
@@ -589,10 +624,12 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       showHoveredPointLabel: false,
       hoveredPointCursor: 'pointer',
       onPointMouseOver: (index: number) => {
+        if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
         hoveredPointIndexRef.current = index;
         scheduleDrawAvatars();
       },
       onPointMouseOut: () => {
+        if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
         hoveredPointIndexRef.current = null;
         scheduleDrawAvatars();
       },
@@ -641,11 +678,11 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         if (index !== undefined) {
           const node = nodesRef.current[index];
           if (node) {
-            applySelectionState(node.id);
+            applySelectionState(node.id, selectedContinentIdRef.current);
             onSelectNodeRef.current(node.id);
           }
         } else {
-          applySelectionState(null);
+          applySelectionState(null, selectedContinentIdRef.current);
           onSelectNodeRef.current(null);
         }
       }
@@ -688,14 +725,8 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       if (isCancelled || !cosmographRef.current) return;
       const cosmo = cosmographRef.current as any;
       if (cosmo?._cosmos?.zoomInstance?.behavior) {
-        const currentZoom = cosmo.getZoomLevel?.();
-        let fittedZoom = currentZoom;
-        if (!fittedZoom || Math.abs(fittedZoom - 1.0) < 0.01) {
-          cosmographRef.current.fitView(0, 0.1);
-          fittedZoom = cosmographRef.current.getZoomLevel() || 0.165;
-        }
-        initialZoomRef.current = fittedZoom;
-        applyZoomLimits(fittedZoom);
+        initialZoomRef.current = 1.0;
+        applyZoomLimits(1.0);
 
         const scale = getZoomScale(cosmo);
         cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
@@ -752,19 +783,17 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       runAnimationLoop(350);
     },
     resetView: () => {
-      const cosmo = cosmographRef.current as any;
-      if (cosmo?._cosmos) {
-        cosmo._cosmos.setConfigPartial({ pointSizeScale: 1.0 });
-        cosmo._cosmos.requestRender();
-      }
       cosmographRef.current?.fitView(600, 0.1);
       runAnimationLoop(650);
       setTimeout(() => {
         const c = cosmographRef.current as any;
-        if (c) {
-          const z = c.getZoomLevel() || initialZoomRef.current || 0.165;
-          initialZoomRef.current = z;
-          applyZoomLimits(z);
+        if (c?._cosmos) {
+          initialZoomRef.current = 1.0;
+          applyZoomLimits(1.0);
+          const scale = getZoomScale(c);
+          c._cosmos.setConfigPartial({ pointSizeScale: scale });
+          c._cosmos.requestRender();
+          scheduleDrawAvatars();
         }
       }, 650);
     },
@@ -805,12 +834,14 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
         bottom: 0,
         width: '100vw',
         height: '100vh',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        touchAction: 'none',
+        zIndex: 0
       }}
     >
       <div
         ref={containerRef}
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: '100%', height: '100%', touchAction: 'none' }}
         className="cursor-grab active:cursor-grabbing outline-none"
       />
       <canvas
@@ -827,4 +858,6 @@ export const AtlasCanvas = forwardRef<AtlasCanvasHandle, AtlasCanvasProps>(({
       />
     </div>
   );
-});
+}));
+
+AtlasCanvas.displayName = 'AtlasCanvas';

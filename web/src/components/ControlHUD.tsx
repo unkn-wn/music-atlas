@@ -6,12 +6,14 @@ interface ControlHUDProps {
   continents: Continent[];
   selectedContinentId: number | null;
   onSelectContinent: (id: number | null) => void;
+  align?: 'left' | 'right';
 }
 
 export const ControlHUD: React.FC<ControlHUDProps> = ({
   continents,
   selectedContinentId,
-  onSelectContinent
+  onSelectContinent,
+  align = 'right'
 }) => {
   const [showContinents, setShowContinents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,8 +30,8 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
         closePopover();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, []);
 
   const activeContinent = continents.find((c) => c.id === selectedContinentId);
@@ -65,7 +67,7 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
         title={activeContinent ? activeContinent.name : 'Filter by continent / musical genre'}
       >
         <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-        <span className="max-w-[280px] sm:max-w-[360px] truncate">
+        <span className="max-w-[130px] sm:max-w-[360px] truncate">
           {activeContinent ? activeContinent.name : 'Continents'}
         </span>
         <ChevronDown className={`w-3.5 h-3.5 text-slate-400 ml-0.5 transition-transform ${showContinents ? 'rotate-180' : ''}`} />
@@ -75,7 +77,7 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
       {showContinents && (
         <div
           onWheel={(e) => e.stopPropagation()}
-          className="absolute right-0 top-full mt-2 glass-panel p-3 shadow-2xl z-50 border border-white/20 flex flex-col"
+          className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} top-full mt-2 glass-panel p-3 shadow-2xl z-50 border border-white/20 flex flex-col`}
           style={{ width: 'min(480px, calc(100vw - 2rem))', maxHeight: 'min(460px, calc(100vh - 100px))' }}
         >
           {/* Header */}
@@ -108,7 +110,7 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Filter continents..."
                 style={{ color: '#f8fafc' }}
-                className="w-full bg-transparent border-none outline-none text-xs placeholder-slate-500"
+                className="w-full bg-transparent border-none outline-none text-base sm:text-xs placeholder-slate-500"
               />
               {searchQuery && (
                 <button

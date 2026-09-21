@@ -217,13 +217,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
   // Close dropdown on outside click
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: PointerEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, []);
 
   const handleSelect = (id: string) => {
@@ -233,9 +233,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   };
 
   return (
-    <div className="relative w-full max-w-md" ref={dropdownRef}>
-      <div className="glass-panel h-10 flex items-center px-3.5 shadow-xl transition-all focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
-        <Search className="w-4 h-4 text-slate-400 mr-2.5 shrink-0" />
+    <div className="relative w-full" ref={dropdownRef}>
+      <div className="glass-panel h-10 flex items-center px-3 sm:px-3.5 shadow-xl transition-all focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
+        <Search className="w-4 h-4 text-slate-400 mr-2 sm:mr-2.5 shrink-0" />
         <input
           ref={inputRef}
           type="text"
@@ -245,8 +245,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             setIsOpen(true);
           }}
           onFocus={() => setIsOpen(true)}
-          placeholder="Search artist, genre, or subgenre... (Ctrl+K)"
-          className="w-full bg-transparent border-none outline-none text-sm text-slate-100 placeholder-slate-500"
+          placeholder="Search artist or genre..."
+          className="w-full bg-transparent border-none outline-none text-base sm:text-sm text-slate-100 placeholder-slate-500 min-w-0"
         />
         {query && (
           <button

@@ -2,7 +2,6 @@
 /node_modules
 **/__pycache__
 
-web/public/data
 web/dist
 
 pipeline/.env

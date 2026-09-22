@@ -1,5 +1,7 @@
 {
-  "dependencies": {
-    "sigma": "^3.0.3"
+  "name": "music-atlas",
+  "private": true,
+  "scripts": {
+    "build": "cd web && npm install && npm run build"
   }
 }

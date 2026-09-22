@@ -152,8 +152,4 @@ music-atlas/
     └── vite.config.ts
 ```
 
----
 
-## License
-
-MIT License. Designed for authentic music exploration and discovery.

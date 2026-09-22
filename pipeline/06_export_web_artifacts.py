@@ -12,6 +12,7 @@ Outputs:
 import os
 import sys
 import json
+import gzip
 import math
 import time
 from datetime import datetime
@@ -274,6 +275,11 @@ def main():
     out_web = os.path.join(WEB_DATA_DIR, "atlas-graph.json")
     with open(out_web, "w", encoding="utf-8") as f:
         json.dump(bundle, f, separators=(',', ':'))
+
+    # Also export compressed atlas-graph.json.gz (6.17 MB) for fast web streaming & Cloudflare 25MB limit
+    out_web_gz = os.path.join(WEB_DATA_DIR, "atlas-graph.json.gz")
+    with open(out_web, "rb") as f_in, gzip.open(out_web_gz, "wb", compresslevel=6) as f_out:
+        f_out.writelines(f_in)
 
     # Purge old continent detail files before writing new ones
     for target_dir in [WEB_DETAILS_DIR, OUTPUT_DETAILS_DIR]:

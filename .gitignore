@@ -3,6 +3,7 @@
 **/__pycache__
 
 web/dist
+web/public/data/atlas-graph.json
 
 pipeline/.env
 **/.env

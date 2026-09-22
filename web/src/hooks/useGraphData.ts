@@ -127,11 +127,32 @@ export function useGraphData() {
     async function loadData() {
       try {
         setLoading(true);
-        const resp = await fetch('/data/atlas-graph.json');
-        if (!resp.ok) {
-          throw new Error(`Failed to load atlas-graph.json (status ${resp.status})`);
+        let bundle: AtlasGraphBundle;
+        // Fast native streaming decompression from /data/atlas-graph.json.gz (6.17 MB vs 30.7 MB)
+        const gzResp = await fetch('/data/atlas-graph.json.gz');
+        if (gzResp.ok) {
+          const contentEncoding = gzResp.headers.get('content-encoding');
+          if (contentEncoding === 'gzip') {
+            // Browser/server already decompressed transparently
+            bundle = await gzResp.json();
+          } else if (typeof DecompressionStream !== 'undefined' && gzResp.body) {
+            try {
+              const ds = new DecompressionStream('gzip');
+              const decompressedStream = gzResp.body.pipeThrough(ds);
+              bundle = await new Response(decompressedStream).json();
+            } catch {
+              bundle = await gzResp.json();
+            }
+          } else {
+            bundle = await gzResp.json();
+          }
+        } else {
+          const resp = await fetch('/data/atlas-graph.json');
+          if (!resp.ok) {
+            throw new Error(`Failed to load atlas-graph data (status ${resp.status})`);
+          }
+          bundle = await resp.json();
         }
-        const bundle: AtlasGraphBundle = await resp.json();
 
         // Configurable seed to reroll continent colors deterministically
         const CONTINENT_COLOR_SEED = 46;

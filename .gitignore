@@ -1,0 +1,13 @@
+**/node_modules
+/node_modules
+**/__pycache__
+
+web/public/data
+web/dist
+
+pipeline/.env
+**/.env
+pipeline/data
+pipeline/output
+pipeline/output_backup*
+*.zip

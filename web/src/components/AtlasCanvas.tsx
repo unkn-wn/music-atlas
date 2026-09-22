@@ -18,6 +18,7 @@ interface AtlasCanvasProps {
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedContinentId: number | null;
+  onReady?: () => void;
 }
 
 // In-memory avatar image cache for standard no-cors HTML image loading.
@@ -116,13 +117,16 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
   neighborMap,
   selectedNodeId,
   onSelectNode,
-  selectedContinentId
+  selectedContinentId,
+  onReady
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const avatarCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cosmographRef = useRef<Cosmograph | null>(null);
   const onSelectNodeRef = useRef(onSelectNode);
   onSelectNodeRef.current = onSelectNode;
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
@@ -515,7 +519,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       cosmos.setConfigPartial({
         highlightedPointIndices: continentIndices,
         highlightedLinkIndices: continentLinks,
-        linkOpacity: 0.25,
+        linkOpacity: 0.15,
         linkGreyoutOpacity: 0.0,
         linkVisibilityMinTransparency: 1.0,
         linkDefaultWidth: 0.8,
@@ -535,7 +539,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       cosmos.setConfigPartial({
         highlightedPointIndices: void 0,
         highlightedLinkIndices: void 0,
-        linkOpacity: 0.18,
+        linkOpacity: 0.1,
         linkGreyoutOpacity: 0.0,
         linkVisibilityMinTransparency: 1.0,
         linkDefaultWidth: 0.8,
@@ -640,7 +644,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       linkTargetIndexBy: 'targetIndex', // Pre-indexed: bypasses 10-second DuckDB WASM INNER JOIN
       linkColorInterpolateFromEndpoints: true, // Colors edges using smooth endpoint gradients
       linkDefaultColor: '#94a3b8',
-      linkOpacity: 0.18, // Visible, delicate translucent filaments across galaxy
+      linkOpacity: 0.1, // Visible, delicate translucent filaments across galaxy
       linkDefaultWidth: 0.8, // Elegant hairline
       scaleLinksOnZoom: false, // Prevents lines from becoming overly thick on zoom
       linkVisibilityDistanceRange: [50000, 50000], // Disables artificial distance culling
@@ -732,9 +736,14 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
         cosmo._cosmos.setConfigPartial({ pointSizeScale: scale });
         cosmo._cosmos.requestRender();
         scheduleDrawAvatars();
+        requestAnimationFrame(() => {
+          onReadyRef.current?.();
+        });
       } else if (fitAttempts < 25) {
         fitAttempts++;
         initialFitTimer = setTimeout(checkFit, 50);
+      } else {
+        onReadyRef.current?.();
       }
     };
     initialFitTimer = setTimeout(checkFit, 50);
@@ -798,10 +807,34 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       }, 650);
     },
     flyToNode: (nodeId: string) => {
-      const cosmo = cosmographRef.current;
+      const cosmo = cosmographRef.current as any;
       if (!cosmo) return;
       const index = nodeIndexMapRef.current.get(nodeId);
       if (index === undefined) return;
+      const isMobile = window.innerWidth < 768;
+      const cosmos = cosmo._cosmos;
+
+      if (isMobile && cosmos?.zoomInstance?.behavior && cosmos?.canvasD3Selection) {
+        const node = nodesRef.current[index];
+        if (node) {
+          // On mobile, the peek bottom sheet occupies ~180px at the bottom of the viewport.
+          // Shift the camera target vertically so the focal artist node is centered in the upper visible area.
+          const bottomSheetH = 180;
+          const targetScale = Math.max(1.8, Math.min(3.5, (cosmo.getZoomLevel?.() ?? 1) * 2.2));
+          const t = cosmos.zoomInstance.getTransform([node.x, node.y], targetScale);
+          if (t && Number.isFinite(t.y)) {
+            t.y -= Math.round(bottomSheetH / 2);
+            cosmos.zoomInstance.shouldEnableSimulationDuringZoomOverride = false;
+            cosmos.canvasD3Selection
+              .transition()
+              .duration(750)
+              .call(cosmos.zoomInstance.behavior.transform, t);
+            runAnimationLoop(800);
+            return;
+          }
+        }
+      }
+
       cosmo.zoomToPoint(index, 750);
       runAnimationLoop(800);
     }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { X, Play, Pause, ExternalLink, Users, Disc3, ArrowRight } from 'lucide-react';
+import { X, Play, Pause, ExternalLink, Disc3, ArrowRight, ChevronUp } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
 // Accent styling constants for artist drawer elements
@@ -32,47 +32,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
   const isImageLoaded = loadedArtistId === artist.id;
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
-  const touchStartYRef = useRef<number | null>(null);
-  const currentDragDeltaRef = useRef<number>(0);
-  const wasDraggedRef = useRef<boolean>(false);
-  const [dragOffset, setDragOffset] = useState<number>(0);
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartYRef.current = e.touches[0].clientY;
-    currentDragDeltaRef.current = 0;
-    wasDraggedRef.current = false;
-    setIsDragging(true);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartYRef.current === null) return;
-    const delta = e.touches[0].clientY - touchStartYRef.current;
-    currentDragDeltaRef.current = delta;
-    if (Math.abs(delta) > 8) {
-      wasDraggedRef.current = true;
-    }
-    setDragOffset(delta);
-  };
-
-  const handleTouchEnd = () => {
-    if (touchStartYRef.current === null) return;
-    const deltaY = currentDragDeltaRef.current;
-    touchStartYRef.current = null;
-    currentDragDeltaRef.current = 0;
-    setIsDragging(false);
-    setDragOffset(0);
-
-    if (deltaY < -40) {
-      setIsExpanded(true);
-    } else if (deltaY > 40) {
-      if (isExpanded) {
-        setIsExpanded(false);
-      } else {
-        onClose();
-      }
-    }
-  };
+  // Mobile bottom sheet expansion toggle (180px peek vs 82dvh expanded)
 
   const isCurrentPlaying = isPlayingPreview && currentlyPlayingId === artist.id;
 
@@ -125,56 +85,45 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
     return url;
   }, [artist.image]);
 
-  const mobileSheetHeight = useMemo(() => {
-    if (typeof window === 'undefined') return '290px';
-    if (!isDragging) {
-      return isExpanded ? '82dvh' : '290px';
-    }
-    const baseH = isExpanded ? window.innerHeight * 0.82 : 290;
-    const draggedH = Math.max(160, Math.min(window.innerHeight * 0.88, baseH - dragOffset));
-    return `${Math.round(draggedH)}px`;
-  }, [isDragging, isExpanded, dragOffset]);
-
   return (
     <div
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
       style={{
-        height: mobileSheetHeight
+        height: isExpanded ? '82dvh' : 'calc(180px + env(safe-area-inset-bottom, 0px))'
       }}
-      className={`glass-panel w-full md:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-6rem)] ${
-        isDragging ? 'transition-none' : 'transition-[height] duration-300 ease-out'
-      } overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15`}
+      className="glass-panel w-full md:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-6rem)] transition-[height] duration-300 ease-out overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15"
     >
-      {/* Mobile Drag Handle */}
+      {/* Mobile Expand / Collapse Chevron */}
       <div
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onClick={() => {
-          if (wasDraggedRef.current) return;
+        onClick={(e) => {
+          e.stopPropagation();
           setIsExpanded(!isExpanded);
         }}
-        className="md:hidden pt-2 pb-0.5 flex flex-col items-center justify-center cursor-pointer select-none shrink-0 touch-none"
+        className="md:hidden pt-2 pb-0.5 flex items-center justify-center cursor-pointer select-none shrink-0 text-slate-400 hover:text-white transition-colors"
       >
-        <div className="w-8 h-1 rounded-full bg-white/25" />
+        <ChevronUp
+          className={`w-4 h-4 text-slate-400 transition-transform duration-300 ${
+            isExpanded ? 'rotate-180' : ''
+          }`}
+        />
       </div>
 
       {/* Mobile Compact Artist Header */}
       <div
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        className="md:hidden px-4 pt-1 pb-2.5 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none touch-none"
+        className="md:hidden px-3.5 pt-0.5 pb-2 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none"
       >
         <div
-          className="flex items-center gap-3 min-w-0 flex-1 cursor-pointer"
-          onClick={() => {
-            if (wasDraggedRef.current) return;
+          className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
             setIsExpanded(!isExpanded);
           }}
         >
           {/* Avatar Circle with accent ring */}
           <div
-            className="w-11 h-11 rounded-full shrink-0 overflow-hidden flex items-center justify-center bg-white/5 border-2 shadow-md"
+            className="w-10 h-10 rounded-full shrink-0 overflow-hidden flex items-center justify-center bg-white/5 border-2 shadow-md"
             style={{ borderColor: accentColor }}
           >
             <img
@@ -196,12 +145,12 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
           {/* Artist Name & Stats */}
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm sm:text-base font-bold text-white tracking-tight truncate leading-tight">
+            <h2 className="text-sm font-bold text-white tracking-tight truncate leading-tight">
               {artist.label}
             </h2>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-slate-400 font-mono font-medium">
-                {subscriberDisplay} subs
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-xs text-slate-400 font-medium">
+                {subscriberDisplay} listeners
               </span>
               {subgenres.length > 0 && (
                 <span
@@ -209,7 +158,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BG_PCT}%, transparent)`,
                     borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
                   }}
-                  className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200 truncate max-w-[120px]"
+                  className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200 truncate max-w-[110px]"
                 >
                   {subgenres[0]}
                 </span>
@@ -221,7 +170,8 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         {/* Action Buttons: Quick Play & Close */}
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               if (hasPreview) onTogglePreview(artist);
             }}
             disabled={!hasPreview}
@@ -252,7 +202,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
             className="w-8 h-8 rounded-xl bg-black/60 hover:bg-black/80 border border-white/15 text-slate-300 hover:text-white transition-colors flex items-center justify-center cursor-pointer shadow-md"
             title="Close Drawer"
           >
@@ -357,17 +310,17 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             setLoadedArtistId(artist.id);
           }}
         />
-        {/* Soft bottom gradient scrim for text readability (does not darken top/middle) */}
+        {/* Bottom gradient scrim for text readability */}
         <div
           style={{
             position: 'absolute',
             bottom: 0,
             left: 0,
             right: 0,
-            height: '55%',
+            height: '62%',
             pointerEvents: 'none',
             zIndex: 6,
-            background: 'linear-gradient(to top, rgba(7, 9, 14, 0.72) 0%, rgba(7, 9, 14, 0.28) 55%, transparent 100%)'
+            background: 'linear-gradient(to top, rgba(7, 9, 14, 0.92) 0%, rgba(7, 9, 14, 0.50) 45%, transparent 100%)'
           }}
         />
 
@@ -430,14 +383,18 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           </div>
         </button>
 
-        {/* Artist Name, Primary Genre & Subgenre Pills */}
+        {/* Artist Name, Listeners & Subgenres */}
         <div style={{ position: 'absolute', bottom: '0.75rem', left: '1rem', right: '4.5rem', zIndex: 10 }}>
           <h2 className="text-xl font-bold text-white tracking-tight truncate drop-shadow-md">
             {artist.label}
           </h2>
-          {(subgenres.length > 0) && (
-            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-              {subgenres.length > 0 && (
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <span className="text-xs text-slate-300 font-medium drop-shadow">
+              {subscriberDisplay} listeners
+            </span>
+            {subgenres.length > 0 && (
+              <>
+                <span className="text-slate-400 text-xs select-none">•</span>
                 <div className="flex items-center gap-1 flex-wrap">
                   {subgenres.slice(0, 3).map((g, idx) => (
                     <span
@@ -452,9 +409,9 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     </span>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -468,17 +425,6 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         }}
         className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-3 sm:gap-4"
       >
-        {/* Metrics (Desktop only; displayed in mobile compact header) */}
-        <div className="hidden md:block text-xs">
-          <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex items-center gap-2.5">
-            <Users className="w-4 h-4 text-cyan-400 shrink-0" />
-            <div className="min-w-0">
-              <div className="text-slate-400 text-[10px] uppercase font-semibold tracking-wider">Subscribers</div>
-              <div className="font-bold text-white font-mono text-sm truncate">{subscriberDisplay}</div>
-            </div>
-          </div>
-        </div>
-
         {/* Top Shared Playlists */}
         <div>
           <div className="flex items-center justify-between mb-2">

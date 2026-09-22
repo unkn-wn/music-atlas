@@ -22,6 +22,7 @@ import json
 import time
 import math
 import random
+import colorsys
 import argparse
 from collections import Counter, defaultdict
 from typing import Dict, List, Set, Tuple
@@ -47,25 +48,23 @@ LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
 GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 
-# Perceptually distinct, vibrant 128-continent palette
-CONTINENT_PALETTE = [
-    "#10B981", "#06B6D4", "#14B8A6", "#2DD4BF", "#059669", "#0D9488", "#0891B2", "#15803D",
-    "#00E5FF", "#38BDF8", "#3B82F6", "#60A5FA", "#0284C7", "#2563EB", "#1D4ED8", "#0EA5E9",
-    "#6366F1", "#8B5CF6", "#A855F7", "#C084FC", "#818CF8", "#C4B5FD", "#7C3AED", "#9333EA",
-    "#4F46E5", "#7E22CE", "#6D28D9", "#4338CA", "#A21CAF", "#C026D3", "#D946EF", "#E879F9",
-    "#EC4899", "#F43F5E", "#F87171", "#FB7185", "#F472B6", "#FDA4AF", "#DB2777", "#DC2626",
-    "#E11D48", "#BE185D", "#B91C1C", "#9F1239", "#FF2A6D", "#FF6584", "#E02424", "#F05252",
-    "#F59E0B", "#EAB308", "#D97706", "#FB923C", "#FACC15", "#FDE047", "#FCD34D", "#CA8A04",
-    "#A16207", "#FF7A00", "#FFAA00", "#FFD600", "#F57C00", "#EF6C00", "#F97316", "#E65100",
-    "#84CC16", "#4ADE80", "#A3E635", "#34D399", "#A7F3D0", "#65A30D", "#16A34A", "#4D7C0F",
-    "#22C55E", "#166534", "#86EFAC", "#BBF7D0", "#48BB78", "#38A169", "#2F855A", "#276749",
-    "#EE33F4", "#F110F8", "#EC55F1", "#33F4B5", "#10F8AD", "#55F1BE", "#F47D33", "#F86910",
-    "#F19155", "#4533F4", "#2510F8", "#6355F1", "#59F433", "#3EF810", "#74F155", "#F43392",
-    "#F81082", "#F155A1", "#33CAF4", "#10C6F8", "#55CFF1", "#F4E533", "#F8E710", "#F1E555",
-    "#AD33F4", "#A310F8", "#B855F1", "#33F475", "#10F85F", "#55F18A", "#F43D33", "#F81C10",
-    "#F15D55", "#3362F4", "#1048F8", "#557AF1", "#9AF433", "#8CF810", "#A8F155", "#F433D2",
-    "#F810D0", "#F155D5", "#33F4DD", "#10F8DD", "#55F1DE", "#F4A533", "#F89910", "#F1B155"
-]
+CONTINENT_COLOR_SEED = 77
+
+def get_continent_color(idx: int) -> str:
+    """Generates a perceptually distinct, deterministic color with varied mood tiers (pastel, deep jewel, vivid, radiant, muted)."""
+    hue = (((idx * 137.507764) + (CONTINENT_COLOR_SEED * 83.17)) % 360.0) / 360.0
+    tiers = [
+        (0.92, 0.56),  # Vivid Electric
+        (0.55, 0.72),  # Soft Pastel
+        (0.84, 0.46),  # Deep Jewel
+        (0.75, 0.62),  # Radiant Warm
+        (0.58, 0.52),  # Muted Dusty
+    ]
+    sat, light = tiers[(idx + CONTINENT_COLOR_SEED) % len(tiers)]
+    r, g, b = colorsys.hls_to_rgb(hue, light, sat)
+    return f"#{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
+
+
 
 def format_genre_name(name: str) -> str:
     """Formats genre and acronym strings cleanly for display."""
@@ -441,7 +440,7 @@ def main():
     artist_continent_map = {}
 
     for idx, (comm, g_member_counts) in enumerate(tqdm(zip(communities, comm_genre_member_counts), total=len(communities), desc="Stage 4C: Continents Consensus", unit="continent"), start=1):
-        color = CONTINENT_PALETTE[(idx - 1) % len(CONTINENT_PALETTE)]
+        color = get_continent_color(idx)
         comm_size = len(comm) or 1
 
         consensus_scores = []

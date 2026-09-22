@@ -16,6 +16,36 @@ function sanitizeAvatarUrl(url: string | undefined): string {
   return clean;
 }
 
+/**
+ * Converts HSL color values to a hex string.
+ * @param h Hue (0 - 360)
+ * @param sPct Saturation percentage (0 - 100)
+ * @param lPct Lightness percentage (0 - 100)
+ */
+function hslToHex(h: number, sPct: number, lPct: number): string {
+  const s = sPct / 100;
+  const l = lPct / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (0 <= h && h < 60) {
+    r = c; g = x; b = 0;
+  } else if (60 <= h && h < 120) {
+    r = x; g = c; b = 0;
+  } else if (120 <= h && h < 180) {
+    r = 0; g = c; b = x;
+  } else if (180 <= h && h < 240) {
+    r = 0; g = x; b = c;
+  } else if (240 <= h && h < 300) {
+    r = x; g = 0; b = c;
+  } else if (300 <= h && h <= 360) {
+    r = c; g = 0; b = x;
+  }
+  const toHex = (val: number) => Math.round((val + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
+}
+
 export function useGraphData() {
   const [data, setData] = useState<AtlasGraphBundle | null>(null);
   const [nodeMap, setNodeMap] = useState<Map<string, AtlasNode>>(new Map());
@@ -103,10 +133,31 @@ export function useGraphData() {
         }
         const bundle: AtlasGraphBundle = await resp.json();
 
-        // Build quick lookup for continent names
+        // Configurable seed to reroll continent colors deterministically
+        const CONTINENT_COLOR_SEED = 46;
+
+        // Multi-tier palettes combining vivid, soft pastel, deep jewel, radiant, and muted tones
+        const COLOR_TIERS = [
+          // { s: 92, l: 56 }, // Vivid Electric
+          { s: 55, l: 72 }, // Soft Pastel
+          { s: 84, l: 46 }, // Deep Jewel
+          { s: 75, l: 62 }, // Radiant Warm
+          { s: 58, l: 52 }, // Muted Dusty
+        ];
+
+        // Build quick lookup for continent names and assign visually diverse, multi-tonal colors
         const continentNames = new Map<number, string>();
+        const continentColors = new Map<number, string>();
         if (bundle.continents) {
-          bundle.continents.forEach((c) => continentNames.set(c.id, c.name));
+          bundle.continents.forEach((c) => {
+            continentNames.set(c.id, c.name);
+            // Golden angle permutation with seed offset for fresh deterministic rerolls
+            const hue = Math.round(((c.id * 137.508) + (CONTINENT_COLOR_SEED * 83.17)) % 360);
+            const tier = COLOR_TIERS[(c.id + CONTINENT_COLOR_SEED) % COLOR_TIERS.length];
+            const distinctColor = hslToHex(hue, tier.s, tier.l);
+            c.color = distinctColor;
+            continentColors.set(c.id, distinctColor);
+          });
         }
 
         const nMap = new Map<string, AtlasNode>();
@@ -121,6 +172,9 @@ export function useGraphData() {
         bundle.nodes.forEach((node, index) => {
           if (!node.continentName) {
             node.continentName = continentNames.get(node.continentId) || '';
+          }
+          if (continentColors.has(node.continentId)) {
+            node.color = continentColors.get(node.continentId)!;
           }
           node.image = sanitizeAvatarUrl(node.image);
           nMap.set(node.id, node);

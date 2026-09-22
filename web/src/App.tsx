@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
-import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2 } from 'lucide-react';
+import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2, X } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
 import { SearchBar } from './components/SearchBar';
@@ -29,6 +29,7 @@ export const App: React.FC = () => {
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
+  const [isCanvasReady, setIsCanvasReady] = useState<boolean>(false);
 
   // Fetch continent details on demand when an artist is selected
   React.useEffect(() => {
@@ -149,19 +150,7 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showAbout]);
 
-  if (loading) {
-    return (
-      <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
-        <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
-        <div className="text-center">
-          <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error || !data) {
+  if (error) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4 text-center px-4">
         <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 max-w-md">
@@ -172,20 +161,46 @@ export const App: React.FC = () => {
     );
   }
 
+  if (!data) {
+    return (
+      <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
+        <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
+        <div className="text-center px-4">
+          <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
+          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#07090e] select-none">
+      {/* Full-Screen Loading Overlay: Stays active and spinning until Cosmograph is fully initialized, uploaded to GPU, and rendered */}
+      {!isCanvasReady && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#07090e] gap-4 pointer-events-auto">
+          <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
+          <div className="text-center px-4">
+            <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
+            <p className="text-sm text-slate-400 font-mono mt-1">
+              Rendering 49,685 artists and crossover filaments...
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* WebGL2 Cosmograph Canvas */}
       <AtlasCanvas
         ref={canvasRef}
         nodes={data.nodes}
-        edges={data.edges}
-        nodeIndexMap={nodeIndexMap}
-        continentIndicesMap={continentIndicesMap}
-        neighborMap={neighborMap}
-        selectedNodeId={selectedArtistId}
-        onSelectNode={handleSelectArtist}
-        selectedContinentId={selectedContinentId}
-      />
+          edges={data.edges}
+          nodeIndexMap={nodeIndexMap}
+          continentIndicesMap={continentIndicesMap}
+          neighborMap={neighborMap}
+          selectedNodeId={selectedArtistId}
+          onSelectNode={handleSelectArtist}
+          selectedContinentId={selectedContinentId}
+          onReady={() => setIsCanvasReady(true)}
+        />
 
       {/* Sleek Floating Top Navigation Island */}
       <header
@@ -193,11 +208,11 @@ export const App: React.FC = () => {
         className="absolute left-4 right-4 z-50 flex items-center justify-between gap-2 sm:gap-4 pointer-events-none"
       >
         {/* Brand Logo & Stats */}
-        <div className="glass-panel h-10 w-10 sm:w-auto p-0 sm:px-3.5 flex items-center justify-center sm:justify-start gap-2 sm:gap-2.5 shadow-xl pointer-events-auto shrink-0">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-emerald-500 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20">
+        <div className="glass-panel rounded-full h-10 w-10 sm:w-auto p-0 sm:px-4 flex items-center justify-center sm:justify-start gap-2.5 shadow-xl pointer-events-auto shrink-0 border border-white/10 bg-[#07090e]/85 backdrop-blur-xl">
+          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-emerald-400 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
             <Radio className="w-3.5 h-3.5 text-black stroke-[2.5]" />
           </div>
-          <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap">
+          <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
             MUSIC ATLAS
           </span>
         </div>
@@ -348,25 +363,70 @@ export const App: React.FC = () => {
 
       {/* About Modal */}
       {showAbout && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pointer-events-auto">
-          <div className="glass-panel max-w-lg w-full p-6 shadow-2xl relative border border-white/20">
-            <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-emerald-400" />
-              About Music Atlas
-            </h3>
-            <p className="text-sm text-slate-300 leading-relaxed mb-4">
-              <strong>Music Atlas</strong> is an interactive WebGL2 spatial network visualization of the global music streaming landscape, powered by empirical EveryNoise taxonomy ingestion and public YouTube Music human community curations.
+        <div
+          onClick={() => setShowAbout(false)}
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pointer-events-auto"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="glass-panel max-w-lg w-full p-6 shadow-2xl relative border border-white/20 rounded-2xl flex flex-col gap-4"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-emerald-400" />
+                About Music Atlas
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAbout(false)}
+                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Music Atlas is an attempt at visualizing the global music streaming landscape, gathering genres from EveryNoise and public YouTube Music user playlists, with artist information from Deezer. The goal is to see common and similar artists that each user would listen to.
             </p>
-            <ul className="text-xs text-slate-300 space-y-2 mb-6 list-disc pl-4 font-normal">
-              <li><strong>Zero Developer Selection Bias:</strong> Systematic EveryNoise genre taxonomy ingestion spanning thousands of micro-genres and underground scenes.</li>
-              <li><strong>Universal Empirical Sizing:</strong> Artist nodes sized strictly proportional to public YouTube Music subscriber counts.</li>
-              <li><strong>Spiderweb Filaments:</strong> Crossover bridges derived from real multi-artist human playlist co-occurrences rendered smoothly in WebGL2 GPU shaders.</li>
-              <li><strong>Adaptive Focus Mode:</strong> Clicking any artist reveals their top 6 to 20 most prominent connections with relative affinity bars.</li>
-              <li><strong>Multi-Subgenre Tagging:</strong> Preserves the top 3 most prominent subgenres per artist with audio preview streams.</li>
-            </ul>
+
+            <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 flex flex-col gap-2.5 text-xs text-slate-300">
+              <div className="flex items-start gap-2.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 mt-1 shrink-0 shadow-sm" />
+                <div>
+                  <strong className="text-white font-semibold">Dot</strong> — a music artist, larger meaning more popular and more fans (data from Deezer)
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2.5">
+                <span className="w-2.5 h-0.5 bg-cyan-400 mt-2 shrink-0 shadow-sm" />
+                <div>
+                  <strong className="text-white font-semibold">Line</strong> — a connection between two artists, showing up in a significant amount of similar playlists
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-gradient-to-tr from-purple-400 to-pink-400 mt-1 shrink-0 shadow-sm" />
+                <div>
+                  <strong className="text-white font-semibold">Color</strong> — a group of genres, defined by EveryNoise subgenres and results from YouTube
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Let me know if there are any bugs or issues at{' '}
+              <a
+                href="mailto:leon.mofx@gmail.com"
+                className="text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
+              >
+                leon.mofx@gmail.com
+              </a>
+              ! Inspired by the Twitch Atlas.
+            </p>
+
             <button
               onClick={() => setShowAbout(false)}
-              className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition-all shadow-lg shadow-emerald-500/20"
+              className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
             >
               Enter the Atlas
             </button>

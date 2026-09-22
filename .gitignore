@@ -7,5 +7,6 @@ web/dist
 
 pipeline/.env
 **/.env
+pipeline/output
 pipeline/output_backup*
 *.zip

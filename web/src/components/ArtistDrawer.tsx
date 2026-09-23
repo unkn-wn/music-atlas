@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { X, Play, Pause, ExternalLink, Disc3, ArrowRight, ChevronUp } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
 
@@ -15,6 +15,7 @@ interface ArtistDrawerProps {
   isPlayingPreview: boolean;
   onTogglePreview: (artist: AtlasNode) => void;
   currentlyPlayingId: string | null;
+  onDragStateChange?: (offsetY: number, isDragging: boolean) => void;
 }
 
 export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
@@ -23,16 +24,131 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
   onSelectNeighbor,
   isPlayingPreview,
   onTogglePreview,
-  currentlyPlayingId
+  currentlyPlayingId,
+  onDragStateChange
 }) => {
   if (!artist) return null;
 
   const accentColor = artist.color || DEFAULT_ACCENT_COLOR;
   const [loadedArtistId, setLoadedArtistId] = useState<string | null>(null);
   const isImageLoaded = loadedArtistId === artist.id;
-  const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [snapState, setSnapState] = useState<'peek' | 'expanded'>('peek');
+  const [dragOffsetY, setDragOffsetY] = useState<number>(0);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
 
-  // Mobile bottom sheet expansion toggle (180px peek vs 82dvh expanded)
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{
+    startY: number;
+    startTime: number;
+    initialSnap: 'peek' | 'expanded';
+    isContentScroll: boolean;
+  } | null>(null);
+
+  const handleDragUpdate = useCallback((offset: number, dragging: boolean) => {
+    setDragOffsetY(offset);
+    setIsDragging(dragging);
+    if (onDragStateChange) {
+      onDragStateChange(offset, dragging);
+    }
+  }, [onDragStateChange]);
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.closest('button') ||
+      target.closest('a') ||
+      target.closest('input') ||
+      target.closest('textarea')
+    ) {
+      return;
+    }
+
+    const touch = e.touches[0];
+    const isInsideContent = contentRef.current && contentRef.current.contains(target);
+    const scrollTop = contentRef.current?.scrollTop || 0;
+
+    dragStartRef.current = {
+      startY: touch.clientY,
+      startTime: Date.now(),
+      initialSnap: snapState,
+      isContentScroll: Boolean(isInsideContent && scrollTop > 0)
+    };
+    handleDragUpdate(0, true);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    const touch = e.touches[0];
+    const deltaY = touch.clientY - dragStartRef.current.startY;
+    const scrollTop = contentRef.current?.scrollTop || 0;
+
+    if (dragStartRef.current.isContentScroll) {
+      if (scrollTop <= 0 && deltaY > 0) {
+        dragStartRef.current.isContentScroll = false;
+        dragStartRef.current.startY = touch.clientY;
+      } else {
+        return;
+      }
+    }
+
+    if (dragStartRef.current.initialSnap === 'expanded') {
+      if (deltaY < 0) {
+        // Rubber-band resistance when pulling up past expanded
+        handleDragUpdate(deltaY * 0.2, true);
+      } else {
+        // Dragging downward towards peek
+        handleDragUpdate(deltaY, true);
+      }
+    } else {
+      // In peek mode
+      if (deltaY < 0) {
+        // Dragging upward towards expanded
+        handleDragUpdate(deltaY, true);
+      } else {
+        // Dragging downward below peek with gentle damping
+        handleDragUpdate(deltaY * 0.8, true);
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    const touch = e.changedTouches[0];
+    const deltaY = touch.clientY - dragStartRef.current.startY;
+    const deltaTime = Math.max(1, Date.now() - dragStartRef.current.startTime);
+    const velocityY = deltaY / deltaTime; // px/ms
+
+    const initial = dragStartRef.current.initialSnap;
+    dragStartRef.current = null;
+    handleDragUpdate(0, false);
+
+    if (initial === 'peek') {
+      // From PEEK:
+      // Dragging UP -> Snap to EXPANDED
+      if (deltaY < -40 || velocityY < -0.3) {
+        setSnapState('expanded');
+      }
+      // Dragging DOWN -> Dismiss ONLY if deliberately pulled down past 90px or fast downward swipe
+      else if (deltaY > 90 || velocityY > 0.6) {
+        onClose();
+      }
+      // Otherwise spring back to peek
+    } else {
+      // From EXPANDED:
+      // Dragging DOWN -> ALWAYS snap to PEEK (never dismiss directly from expanded)
+      if (deltaY > 60 || velocityY > 0.35) {
+        setSnapState('peek');
+      }
+      // Otherwise spring back to expanded
+    }
+  };
+
+  // Reset inner scroll when collapsing to peek
+  useEffect(() => {
+    if (snapState === 'peek' && contentRef.current) {
+      contentRef.current.scrollTop = 0;
+    }
+  }, [snapState]);
 
   const isCurrentPlaying = isPlayingPreview && currentlyPlayingId === artist.id;
 
@@ -89,36 +205,37 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
     <div
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
-      onTouchStart={(e) => e.stopPropagation()}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       style={{
-        height: isExpanded ? '82dvh' : 'calc(180px + env(safe-area-inset-bottom, 0px))'
+        height: snapState === 'expanded' ? '82dvh' : 'calc(185px + env(safe-area-inset-bottom, 0px))',
+        transform: onDragStateChange ? undefined : (isDragging && dragOffsetY !== 0 ? `translateY(${dragOffsetY}px)` : 'translateY(0px)'),
+        transition: isDragging ? 'none' : 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1), transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
       }}
-      className="glass-panel w-full md:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-6rem)] transition-[height] duration-300 ease-out overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15"
+      className="glass-panel w-full md:w-72 lg:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-10.5rem)] md:!transform-none overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15 relative"
     >
-      {/* Mobile Expand / Collapse Chevron */}
+      {/* Mobile iOS Sheet Grab Handle (Floating overlay at top) */}
       <div
         onClick={(e) => {
           e.stopPropagation();
-          setIsExpanded(!isExpanded);
+          setSnapState((prev) => (prev === 'peek' ? 'expanded' : 'peek'));
         }}
-        className="md:hidden pt-2 pb-0.5 flex items-center justify-center cursor-pointer select-none shrink-0 text-slate-400 hover:text-white transition-colors"
+        className="md:hidden absolute top-1.5 inset-x-0 flex justify-center py-1 cursor-pointer select-none z-20 pointer-events-auto"
       >
-        <ChevronUp
-          className={`w-4 h-4 text-slate-400 transition-transform duration-300 ${
-            isExpanded ? 'rotate-180' : ''
-          }`}
-        />
+        <div className="w-10 h-1 bg-white/25 rounded-full hover:bg-white/40 transition-colors" />
       </div>
 
       {/* Mobile Compact Artist Header */}
       <div
-        className="md:hidden px-3.5 pt-0.5 pb-2 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none"
+        className="md:hidden px-3.5 pt-3.5 pb-2.5 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none relative"
       >
         <div
           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
-            setIsExpanded(!isExpanded);
+            setSnapState((prev) => (prev === 'peek' ? 'expanded' : 'peek'));
           }}
         >
           {/* Avatar Circle with accent ring */}
@@ -206,7 +323,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
               e.stopPropagation();
               onClose();
             }}
-            className="w-8 h-8 rounded-xl bg-black/60 hover:bg-black/80 border border-white/15 text-slate-300 hover:text-white transition-colors flex items-center justify-center cursor-pointer shadow-md"
+            className="p-1.5 text-slate-400 hover:text-white transition-colors flex items-center justify-center cursor-pointer shrink-0"
             title="Close Drawer"
           >
             <X className="w-4 h-4" />
@@ -223,7 +340,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           backgroundColor: '#07090e',
           flexShrink: 0
         }}
-        className="hidden md:block aspect-square max-h-72 border-b border-white/10"
+        className="hidden md:block aspect-square max-h-56 lg:max-h-72 border-b border-white/10"
       >
         {/* High-visibility Skeleton placeholder while artist picture is loading (no fading) */}
         {!isImageLoaded && (
@@ -417,6 +534,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
       {/* Body Content */}
       <div
+        ref={contentRef}
         style={{
           touchAction: 'pan-y',
           overscrollBehaviorY: 'contain',
@@ -447,13 +565,13 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                   >
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-slate-500 text-[11px]">#{idx + 1}</span>
+                        <span className="text-slate-500 text-[11px]">#{idx + 1}</span>
                         <span className="font-semibold text-white truncate group-hover:text-emerald-400 transition-colors">
                           {c.neighborName}
                         </span>
                       </div>
                       <div
-                        className="flex items-center gap-1 text-[11px] font-mono font-bold shrink-0"
+                        className="flex items-center gap-1 text-[11px] font-bold shrink-0"
                         style={{ color: accentColor }}
                       >
                         <span>{c.sharedPlaylists}</span>

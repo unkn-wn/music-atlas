@@ -9,7 +9,6 @@ export interface CrossoverNeighbor {
 
 export interface ArtistDetail {
   subscribersFormatted?: string;
-  topTrack?: string;
   previewUrl?: string;
   spotifyUrl?: string;
   totalPlaylists?: number;
@@ -32,7 +31,6 @@ export interface AtlasNode {
 
   // Optional fields populated when merged with ArtistDetail
   subscribersFormatted?: string;
-  topTrack?: string;
   previewUrl?: string;
   spotifyUrl?: string;
   totalPlaylists?: number;

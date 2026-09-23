@@ -30,6 +30,8 @@ export const App: React.FC = () => {
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
   const [isCanvasReady, setIsCanvasReady] = useState<boolean>(false);
+  const [mobileDragOffset, setMobileDragOffset] = useState<number>(0);
+  const [isMobileDragging, setIsMobileDragging] = useState<boolean>(false);
 
   // Fetch continent details on demand when an artist is selected
   React.useEffect(() => {
@@ -89,6 +91,8 @@ export const App: React.FC = () => {
   // Immediate, synchronous artist selection
   const handleSelectArtist = useCallback((id: string | null, shouldFly: boolean = false) => {
     setSelectedArtistId(id);
+    setMobileDragOffset(0);
+    setIsMobileDragging(false);
     if (id && shouldFly && canvasRef.current) {
       canvasRef.current.flyToNode(id);
     }
@@ -99,6 +103,8 @@ export const App: React.FC = () => {
     setSelectedContinentId(continentId);
     if (continentId !== null) {
       setSelectedArtistId(null);
+      setMobileDragOffset(0);
+      setIsMobileDragging(false);
     }
   }, []);
 
@@ -155,7 +161,7 @@ export const App: React.FC = () => {
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4 text-center px-4">
         <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 max-w-md">
           <h2 className="text-base font-bold mb-1">Failed to load Atlas Graph</h2>
-          <p className="text-xs text-slate-400 font-mono">{error || "Graph data unavailable"}</p>
+          <p className="text-xs text-slate-400">{error || "Graph data unavailable"}</p>
         </div>
       </div>
     );
@@ -167,7 +173,7 @@ export const App: React.FC = () => {
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center px-4">
           <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 font-mono mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
+          <p className="text-sm text-slate-400 mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
         </div>
       </div>
     );
@@ -181,7 +187,7 @@ export const App: React.FC = () => {
           <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
           <div className="text-center px-4">
             <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-            <p className="text-sm text-slate-400 font-mono mt-1">
+            <p className="text-sm text-slate-400 mt-1">
               Rendering 49,685 artists and crossover filaments...
             </p>
           </div>
@@ -273,81 +279,97 @@ export const App: React.FC = () => {
       {/* Desktop: Bottom-Left */}
       <div
         style={{ position: 'fixed', bottom: '24px', left: '24px', zIndex: 30 }}
-        className="hidden sm:flex pointer-events-auto flex-col gap-1.5 shadow-2xl"
+        className="hidden sm:flex pointer-events-auto flex-col items-center bg-[#07090e]/70 backdrop-blur-xl border border-white/10 rounded-2xl p-1 shadow-2xl"
       >
         <button
           onClick={() => canvasRef.current?.zoomIn()}
-          className="glass-panel w-9 h-9 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           title="Zoom In"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
+        <div className="w-3.5 h-[1px] bg-white/10 my-0.5" />
         <button
           onClick={() => canvasRef.current?.zoomOut()}
-          className="glass-panel w-9 h-9 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           title="Zoom Out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
+        <div className="w-3.5 h-[1px] bg-white/10 my-0.5" />
         <button
           onClick={() => canvasRef.current?.resetView()}
-          className="glass-panel w-9 h-9 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
-          title="Reset Map View"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Mobile: Top-Right Beneath Header */}
-      <div
-        style={{ position: 'fixed', top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)', right: '16px', zIndex: 30 }}
-        className="flex sm:hidden pointer-events-auto flex-col gap-1.5 shadow-2xl"
-      >
-        <button
-          onClick={() => canvasRef.current?.zoomIn()}
-          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
-          title="Zoom In"
-        >
-          <ZoomIn className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => canvasRef.current?.zoomOut()}
-          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
-          title="Zoom Out"
-        >
-          <ZoomOut className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => canvasRef.current?.resetView()}
-          className="glass-panel w-8 h-8 flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/15 transition-all shadow-lg rounded-xl"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           title="Reset Map View"
         >
           <Maximize2 className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* Bottom Container for Mobile Sheet & Persistent Audio Player */}
+      {/* Mobile: Top-Right Beneath Header */}
+      <div
+        style={{ position: 'fixed', top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)', right: '16px', zIndex: 30 }}
+        className="flex sm:hidden pointer-events-auto flex-col items-center bg-[#07090e]/70 backdrop-blur-xl border border-white/10 rounded-2xl p-1 shadow-2xl"
+      >
+        <button
+          onClick={() => canvasRef.current?.zoomIn()}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          title="Zoom In"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+        <div className="w-3.5 h-[1px] bg-white/10 my-0.5" />
+        <button
+          onClick={() => canvasRef.current?.zoomOut()}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          title="Zoom Out"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+        <div className="w-3.5 h-[1px] bg-white/10 my-0.5" />
+        <button
+          onClick={() => canvasRef.current?.resetView()}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          title="Reset Map View"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Bottom Container for Mobile Sheet & Persistent Audio Player (Single Instance in DOM) */}
       <div className="fixed z-[60] pointer-events-none bottom-0 left-0 right-0 w-full flex flex-col items-center justify-end md:contents">
-        {/* Persistent Audio Player Bar */}
+        {/* Single Persistent Audio Player Bar */}
         {activeAudioArtist && (
           <div
             style={{
-              marginBottom: selectedArtist ? '8px' : 'max(12px, env(safe-area-inset-bottom))'
+              marginBottom: selectedArtist ? '6px' : 'max(12px, env(safe-area-inset-bottom))',
+              transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
+              transition: isMobileDragging ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1), margin 0.3s ease-out'
             }}
-            className="pointer-events-none px-3 sm:px-4 w-full max-w-2xl flex justify-center transition-[margin] duration-300 ease-out md:fixed md:bottom-6 md:left-1/2 md:-translate-x-1/2 md:mb-0 md:z-[60]"
+            className="pointer-events-auto px-3 sm:px-4 w-full max-w-2xl flex justify-center md:fixed md:bottom-6 md:left-0 md:right-0 md:mx-auto md:mb-0 md:z-[60]"
           >
             <AudioPlayerBar
               currentArtist={mergedAudioArtist}
               isPlaying={isPlayingAudio}
               onTogglePlay={() => setIsPlayingAudio(!isPlayingAudio)}
               onSelectArtist={(id) => handleSelectArtist(id, true)}
+              onClose={() => {
+                setIsPlayingAudio(false);
+                setActiveAudioArtist(null);
+              }}
             />
           </div>
         )}
 
-        {/* Floating Artist Inspector: Desktop Slide-over Drawer & Mobile Native Bottom Sheet */}
+        {/* Single Floating Artist Inspector: Desktop Slide-over Drawer & Mobile Native Bottom Sheet */}
         {selectedArtist && (
-          <div className="pointer-events-none w-full md:w-auto md:fixed md:top-[72px] md:bottom-6 md:right-6 md:z-[60] flex justify-center md:justify-end">
+          <div
+            style={{
+              transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
+              transition: isMobileDragging ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
+            }}
+            className="pointer-events-auto w-full md:w-auto md:fixed md:top-[72px] md:bottom-24 md:right-4 lg:right-6 md:z-[60] flex justify-center md:justify-end"
+          >
             <ArtistDrawer
               key={selectedArtist.id}
               artist={selectedArtist}
@@ -356,6 +378,10 @@ export const App: React.FC = () => {
               isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
               onTogglePreview={handleTogglePreview}
               currentlyPlayingId={activeAudioArtist?.id || null}
+              onDragStateChange={(offset, dragging) => {
+                setMobileDragOffset(offset);
+                setIsMobileDragging(dragging);
+              }}
             />
           </div>
         )}

@@ -210,7 +210,6 @@ def main():
 
         details[a_id] = {
             "subscribersFormatted": meta.get("subscribersFormatted") or meta.get("formattedSubscribers") or f"{subs:,}",
-            "topTrack": meta.get("topTrack") or meta.get("top_track", ""),
             "previewUrl": meta.get("previewUrl", ""),
             "deezerUrl": meta.get("deezerUrl", ""),
             "totalPlaylists": c_i,

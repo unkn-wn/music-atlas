@@ -64,12 +64,24 @@ function jsonpRequest(url: string, timeoutMs: number = 6000): Promise<any> {
 }
 
 /**
- * Resolves a fresh, playable 30s preview URL for any artist node.
+ * Synchronously checks if a valid cached preview exists.
+ */
+export function getCachedPreview(artistId?: string | null, artistName?: string | null): DeezerPreviewResult | null {
+  if (!artistId && !artistName) return null;
+  const cacheKey = artistId || artistName?.toLowerCase().trim() || '';
+  const cached = previewCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { previewUrl: cached.previewUrl, trackTitle: cached.trackTitle };
+  }
+  return null;
+}
+
+/**
+ * Resolves a fresh, playable 30s preview URL directly from Deezer for any artist node.
  */
 export async function resolveArtistPreview(
   artistId: string,
-  artistName: string,
-  topTrack?: string
+  artistName: string
 ): Promise<DeezerPreviewResult | null> {
   const cacheKey = artistId || artistName.toLowerCase().trim();
   const cached = previewCache.get(cacheKey);
@@ -83,41 +95,15 @@ export async function resolveArtistPreview(
   if (artistId.startsWith('dz_')) {
     const dzId = artistId.replace('dz_', '');
     try {
-      const resp = await jsonpRequest(`https://api.deezer.com/artist/${dzId}/top?limit=3`);
+      const resp = await jsonpRequest(`https://api.deezer.com/artist/${dzId}/top?limit=10`);
       const items = resp?.data;
-      if (Array.isArray(items)) {
-        for (const track of items) {
-          if (track?.preview) {
-            const result: DeezerPreviewResult = {
-              previewUrl: track.preview,
-              trackTitle: track.title || topTrack
-            };
-            previewCache.set(cacheKey, {
-              ...result,
-              expiresAt: Date.now() + 12 * 60 * 1000
-            });
-            return result;
-          }
-        }
-      }
-    } catch {
-      // Fall through to search query fallback
-    }
-  }
+      if (Array.isArray(items) && items.length > 0) {
+        const chosenTrack = items.find((t) => t?.preview) || items[0];
 
-  // 2. Search fallback: Query Deezer catalog by artist name and/or topTrack
-  try {
-    const query = topTrack && topTrack !== artistName
-      ? `${artistName} ${topTrack}`
-      : artistName;
-    const resp = await jsonpRequest(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=3`);
-    const items = resp?.data;
-    if (Array.isArray(items)) {
-      for (const track of items) {
-        if (track?.preview) {
+        if (chosenTrack?.preview) {
           const result: DeezerPreviewResult = {
-            previewUrl: track.preview,
-            trackTitle: track.title || topTrack
+            previewUrl: chosenTrack.preview,
+            trackTitle: chosenTrack.title || artistName
           };
           previewCache.set(cacheKey, {
             ...result,
@@ -125,6 +111,29 @@ export async function resolveArtistPreview(
           });
           return result;
         }
+      }
+    } catch {
+      // Fall through to search query fallback
+    }
+  }
+
+  // 2. Search fallback: Query Deezer catalog by artist name
+  try {
+    const resp = await jsonpRequest(`https://api.deezer.com/search?q=${encodeURIComponent(artistName)}&limit=5`);
+    const items = resp?.data;
+    if (Array.isArray(items) && items.length > 0) {
+      const chosenTrack = items.find((t) => t?.preview) || items[0];
+
+      if (chosenTrack?.preview) {
+        const result: DeezerPreviewResult = {
+          previewUrl: chosenTrack.preview,
+          trackTitle: chosenTrack.title || artistName
+        };
+        previewCache.set(cacheKey, {
+          ...result,
+          expiresAt: Date.now() + 12 * 60 * 1000
+        });
+        return result;
       }
     }
   } catch {

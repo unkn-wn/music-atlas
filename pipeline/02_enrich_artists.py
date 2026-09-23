@@ -318,11 +318,9 @@ class DeezerArbiter:
                         selected_tracks = self.get_candidate_tracks(aid, limit=10)
 
                     preview_url = ""
-                    top_track = ""
                     for t in selected_tracks:
                         if t.get("preview"):
                             preview_url = t.get("preview")
-                            top_track = t.get("title", "")
                             break
 
                     return True, {
@@ -332,7 +330,6 @@ class DeezerArbiter:
                         "fans": fans,
                         "image": portrait_url,
                         "previewUrl": preview_url,
-                        "topTrack": top_track,
                         "deezer_url": matched_cand.get("link", f"https://www.deezer.com/artist/{aid}")
                     }
                 else:
@@ -529,7 +526,6 @@ def main():
                 artist_id = dz_meta.get("id", f"dz_{art_key}")
                 fans = dz_meta.get("fans", 0)
                 preview_url = dz_meta.get("previewUrl", "")
-                top_track = dz_meta.get("topTrack", "")
                 portrait_url = dz_meta.get("image", "")
                 deezer_url = dz_meta.get("deezer_url", "")
 
@@ -538,7 +534,6 @@ def main():
                     "id": artist_id,
                     "name": canonical_name,
                     "previewUrl": preview_url,
-                    "topTrack": top_track,
                     "image": portrait_url,
                     "spotifyUrl": f"https://open.spotify.com/search/{canonical_name}",
                     "deezerUrl": deezer_url,
@@ -607,7 +602,6 @@ def main():
             "primaryGenre": primary_genre,
             "topSubgenres": top_subgenres,
             "previewUrl": meta.get("previewUrl", ""),
-            "topTrack": meta.get("topTrack", ""),
             "image": meta.get("image", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{canonical_name}"),
             "deezerUrl": meta.get("deezerUrl", ""),

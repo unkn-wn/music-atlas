@@ -261,7 +261,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             <X className="w-3.5 h-3.5" />
           </button>
         )}
-        <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-white/5 border border-white/10 rounded ml-2">
+        <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] text-slate-400 bg-white/5 border border-white/10 rounded ml-2">
           /
         </kbd>
       </div>

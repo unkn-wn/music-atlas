@@ -148,7 +148,7 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
                 }`}
               >
                 <span>All Continents</span>
-                <span className="font-mono text-[10px] text-slate-400">
+                <span className="text-[10px] text-slate-400">
                   ({continents.reduce((acc, c) => acc + c.artistCount, 0).toLocaleString()})
                 </span>
               </button>
@@ -179,7 +179,7 @@ export const ControlHUD: React.FC<ControlHUDProps> = ({
                       />
                       <span className="truncate">{c.name}</span>
                     </div>
-                    <span className="font-mono text-[10px] text-slate-400 shrink-0 ml-2">
+                    <span className="text-[10px] text-slate-400 shrink-0 ml-2">
                       {c.artistCount.toLocaleString()}
                     </span>
                   </button>

@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX, ExternalLink, Loader2 } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Loader2, X } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
-import { resolveArtistPreview } from '../utils/audioResolver';
+import { resolveArtistPreview, getCachedPreview } from '../utils/audioResolver';
 
 interface AudioPlayerBarProps {
   currentArtist: AtlasNode | null;
@@ -15,6 +15,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   currentArtist,
   isPlaying,
   onTogglePlay,
+  onClose,
   onSelectArtist
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -27,7 +28,10 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const [volume, setVolume] = useState(0.2);
   const [isMuted, setIsMuted] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
-  const [resolvedTitle, setResolvedTitle] = useState<string | null>(null);
+  const [resolvedTitle, setResolvedTitle] = useState<string | null>(() => {
+    const cached = currentArtist ? getCachedPreview(currentArtist.id, currentArtist.label) : null;
+    return cached?.trackTitle || null;
+  });
 
   // Synchronously stop and purge old audio when artist changes
   useEffect(() => {
@@ -41,7 +45,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     activeArtistIdRef.current = currentArtist?.id || null;
     setCurrentTime(0);
     setProgress(0);
-    setResolvedTitle(null);
+    const cached = currentArtist ? getCachedPreview(currentArtist.id, currentArtist.label) : null;
+    setResolvedTitle(cached?.trackTitle || null);
     setIsLoadingAudio(false);
   }, [currentArtist?.id]);
 
@@ -91,7 +96,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     activeArtistIdRef.current = targetArtistId;
     setIsLoadingAudio(true);
 
-    resolveArtistPreview(targetArtistId, currentArtist.label, currentArtist.topTrack)
+    resolveArtistPreview(targetArtistId, currentArtist.label)
       .then(async (result) => {
         // Discard if user switched artists while resolving
         if (activeArtistIdRef.current !== targetArtistId) {
@@ -190,7 +195,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             onSelectArtist(currentArtist.id);
           }
         }}
-        className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-[125px] sm:max-w-none sm:w-52 shrink-0 cursor-pointer group select-none"
+        className="flex items-center gap-2 sm:gap-3 w-40 sm:w-56 shrink-0 cursor-pointer group select-none min-w-0"
         title={`View ${currentArtist.label} details`}
       >
         <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden relative shrink-0 bg-slate-800 shadow-md group-hover:scale-105 transition-transform">
@@ -213,11 +218,18 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </div>
           )}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors" title={resolvedTitle || currentArtist.topTrack || currentArtist.label}>
-            {resolvedTitle || currentArtist.topTrack || currentArtist.label}
-          </div>
-          <div className="text-[10px] sm:text-[11px] text-slate-400 truncate flex items-center gap-1">
+        <div className="min-w-0 flex-1 flex flex-col justify-between h-8 sm:h-9 py-0.5">
+          {resolvedTitle ? (
+            <div
+              className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors leading-tight"
+              title={resolvedTitle}
+            >
+              {resolvedTitle}
+            </div>
+          ) : (
+            <div className="h-3 w-28 sm:w-36 bg-white/10 rounded animate-pulse" />
+          )}
+          <div className="text-[10px] sm:text-[11px] text-slate-400 truncate flex items-center gap-1 leading-tight">
             <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentArtist.color }} />
             <span className="truncate group-hover:text-slate-200 transition-colors">
               {currentArtist.label}
@@ -254,7 +266,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
       {/* Scrubber & Time */}
       <div className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">
-        <span className="text-[10px] font-mono text-slate-400 w-7 sm:w-8 text-right shrink-0">
+        <span className="text-[10px] text-slate-400 w-7 sm:w-8 text-right shrink-0">
           0:{Math.floor(currentTime).toString().padStart(2, '0')}
         </span>
         <input
@@ -267,7 +279,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           disabled={!hasPreview}
           className="w-full min-w-0"
         />
-        <span className="text-[10px] font-mono text-slate-400 w-7 sm:w-8 shrink-0">
+        <span className="text-[10px] text-slate-400 w-7 sm:w-8 shrink-0">
           0:{Math.floor(duration).toString().padStart(2, '0')}
         </span>
       </div>
@@ -291,16 +303,20 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         />
       </div>
 
-      {/* Spotify External Link */}
-      <a
-        href={currentArtist.spotifyUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="p-1 sm:p-1.5 text-slate-400 hover:text-[#1DB954] transition-colors shrink-0"
-        title="Open in Spotify"
-      >
-        <ExternalLink className="w-4 h-4" />
-      </a>
+      {/* Close/Dismiss Player Button */}
+      {onClose && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          className="p-1 sm:p-1.5 text-slate-400 hover:text-white transition-colors shrink-0 cursor-pointer flex items-center justify-center"
+          title="Dismiss playback"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
     </div>
   );
 };

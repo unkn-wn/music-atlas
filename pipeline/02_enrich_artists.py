@@ -197,8 +197,8 @@ class DeezerArbiter:
                 time.sleep(self.min_interval - elapsed)
             self.last_call = time.time()
 
-    def get_candidate_tracks(self, aid: int, limit: int = 10) -> List[Dict[str, Any]]:
-        """Fetches top tracks for an artist candidate (limit=10 for rich vocabulary matching)."""
+    def get_candidate_tracks(self, aid: int, limit: int = 30) -> List[Dict[str, Any]]:
+        """Fetches top tracks for an artist candidate (limit=30 for rich vocabulary matching)."""
         for retry in range(3):
             try:
                 self._pace()
@@ -227,6 +227,7 @@ class DeezerArbiter:
         and Track-Overlap Disambiguation Guard, and enriches with preview, fans, and image.
         """
         target_norm = normalize_text(target_name)
+        is_single_word = len(target_name.strip().split()) == 1
         target_clean_words = set(playlist_words) if playlist_words else set()
         target_clean_words.discard(target_norm)
 
@@ -249,21 +250,26 @@ class DeezerArbiter:
                     matched_cand = None
                     selected_tracks = []
 
-                    # 1. Exact Match Immunity
+                    # 1. Exact Match Immunity & Verification
                     if is_exact and exact_cand:
                         matched_id = exact_cand.get("id")
-                        selected_tracks = self.get_candidate_tracks(matched_id, limit=10)
+                        selected_tracks = self.get_candidate_tracks(matched_id, limit=30)
                         c_words = set()
                         for t in selected_tracks:
                             c_words.update(extract_content_words(t.get("title", "")))
                         c_words.discard(target_norm)
 
                         overlap = target_clean_words.intersection(c_words)
-                        # Exact candidate accepted if it matches playlist tracks, or if no playlist words exist to contest
-                        if len(overlap) >= 1 or not target_clean_words:
-                            matched_cand = exact_cand
+                        # Multi-word artists are trusted on exact match (or if overlap >= 1).
+                        # Single-word artists strictly require >= 2 distinctive overlapping content words.
+                        if not is_single_word:
+                            if len(overlap) >= 1 or not target_clean_words:
+                                matched_cand = exact_cand
+                        else:
+                            if len(overlap) >= 2:
+                                matched_cand = exact_cand
 
-                    # 2. Disambiguation Guard: triggers if exact match had 0 track overlap or no exact match exists
+                    # 2. Disambiguation Guard: triggers if exact match had insufficient track overlap or no exact match exists
                     if not matched_cand:
                         competing = []
                         for c in items:
@@ -285,7 +291,7 @@ class DeezerArbiter:
                             c_aid = c.get("id")
                             if is_exact and exact_cand and c_aid == exact_cand.get("id"):
                                 continue
-                            c_tracks = self.get_candidate_tracks(c_aid, limit=10)
+                            c_tracks = self.get_candidate_tracks(c_aid, limit=30)
                             c_words = set()
                             for t in c_tracks:
                                 c_words.update(extract_content_words(t.get("title", "")))
@@ -302,8 +308,8 @@ class DeezerArbiter:
                         if best_candidate:
                             matched_cand = best_candidate
                             selected_tracks = best_tracks
-                        elif is_exact and exact_cand:
-                            # Safe fallback: preserve exact match candidate
+                        elif is_exact and exact_cand and not is_single_word:
+                            # Safe fallback: preserve multi-word exact match candidate
                             matched_cand = exact_cand
 
                     if not matched_cand:
@@ -315,7 +321,7 @@ class DeezerArbiter:
                     portrait_url = matched_cand.get("picture_xl") or matched_cand.get("picture_medium", "")
 
                     if not selected_tracks:
-                        selected_tracks = self.get_candidate_tracks(aid, limit=10)
+                        selected_tracks = self.get_candidate_tracks(aid, limit=30)
 
                     preview_url = ""
                     for t in selected_tracks:

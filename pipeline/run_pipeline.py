@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--clear-cache", action="store_true", help="Wipe intermediate output files in pipeline/output/ before running")
     parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count in Stage 5 (default: 128)")
     parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width in Stage 5 (default: 6400.0)")
+    parser.add_argument("--reverse", action="store_true", help="Process genres in reverse rank order (niche/underground genres first)")
     args = parser.parse_args()
 
     OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
@@ -64,6 +65,8 @@ def main():
     print(f" STARTING AUTONOMOUS MUSIC ATLAS PIPELINE (Tier {args.tier})")
     print(f" Candidate Survival Threshold: c_i >= {args.min_playlists}")
     print(f" Target Playlists per Subgenre: {args.target_playlists}")
+    if args.reverse:
+        print(" Traversal: Reverse Order (Niche/Underground First)")
     print("=" * 75)
     start_all = time.time()
     total_steps = len(STEPS)
@@ -90,6 +93,8 @@ def main():
             cmd.extend(["--target-playlists", str(args.target_playlists), "--max-anchors", str(args.max_anchors)])
             if args.fresh:
                 cmd.append("--fresh")
+            if args.reverse:
+                cmd.append("--reverse")
         elif step_idx == 2:
             cmd.extend(["--min-playlists", str(args.min_playlists)])
             if args.offline:

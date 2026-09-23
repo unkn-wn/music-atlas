@@ -286,6 +286,7 @@ def main():
     parser.add_argument("--max-anchors", type=int, default=8, help="Max anchor artists for Tier 2 recommendation discovery (default: 8)")
     parser.add_argument("--rate-limit", type=float, default=3.0, help="Max requests per second for YTM (default: 3.0)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
+    parser.add_argument("--reverse", action="store_true", help="Process genres in reverse rank order (niche/underground genres first)")
     args = parser.parse_args()
 
     if not os.path.exists(GENRES_FILE):
@@ -293,6 +294,10 @@ def main():
 
     with open(GENRES_FILE, "r", encoding="utf-8") as f:
         genres_data = json.load(f)
+
+    if args.reverse:
+        genres_data = list(reversed(genres_data))
+        print("Reverse order active: Harvesting from deepest niche/underground subgenres backward.")
 
     if args.limit_genres:
         genres_data = genres_data[:args.limit_genres]

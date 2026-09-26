@@ -239,7 +239,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
     const behavior = cosmo?._cosmos?.zoomInstance?.behavior;
     if (!behavior) return;
     const current = baseZoom || 1.0;
-    const minZoom = Math.max(0.01, current * 0.05);
+    const minZoom = Math.max(0.01, current * 0.1);
     const maxZoom = Math.max(15.0, current * 45);
     behavior.scaleExtent([minZoom, maxZoom]);
   }, []);

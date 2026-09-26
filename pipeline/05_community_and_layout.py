@@ -48,13 +48,13 @@ LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
 GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 
-CONTINENT_COLOR_SEED = 77
+CONTINENT_COLOR_SEED = 56
 
 def get_continent_color(idx: int) -> str:
     """Generates a perceptually distinct, deterministic color with varied mood tiers (pastel, deep jewel, vivid, radiant, muted)."""
     hue = (((idx * 137.507764) + (CONTINENT_COLOR_SEED * 83.17)) % 360.0) / 360.0
     tiers = [
-        (0.92, 0.56),  # Vivid Electric
+        # (0.92, 0.56),  # Vivid Electric
         (0.55, 0.72),  # Soft Pastel
         (0.84, 0.46),  # Deep Jewel
         (0.75, 0.62),  # Radiant Warm
@@ -142,15 +142,22 @@ def run_archipelago_layout(
     macro_G = nx.Graph()
     for i in range(K):
         macro_G.add_node(i)
-    for i in range(K):
-        for j in range(i + 1, K):
-            if inter_aff[i, j] > 0.1:
-                macro_G.add_edge(i, j, weight=float(inter_aff[i, j]))
 
-    c_pos_dict = nx.spring_layout(macro_G, weight="weight", seed=42, iterations=400)
+    top_edges = set()
+    for i in range(K):
+        row = [(j, inter_aff[i, j]) for j in range(K) if j != i and inter_aff[i, j] > 0.25]
+        row.sort(key=lambda x: x[1], reverse=True)
+        for j, w in row[:8]:
+            top_edges.add(tuple(sorted([i, j])))
+
+    for i, j in top_edges:
+        macro_G.add_edge(i, j, weight=float(inter_aff[i, j]) ** 2.0)
+
+    k_val = 3.2 / math.sqrt(K)
+    c_pos_dict = nx.spring_layout(macro_G, weight="weight", seed=42, iterations=400, k=k_val)
     c_pos = np.array([c_pos_dict[i] for i in range(K)], dtype=np.float32)
     c_radii = np.linalg.norm(c_pos, axis=1, keepdims=True) + 1e-4
-    macro_radius = canvas_bound * 0.55
+    macro_radius = canvas_bound * 0.70
     c_pos = (c_pos / np.max(c_radii)) * macro_radius
 
     # 2. Level 2: Subgenre Micro-Centroids within each Continent
@@ -178,22 +185,22 @@ def run_archipelago_layout(
 
         for s_i, (subg, members) in enumerate(sorted_subgs):
             ang = subg_angles[s_i]
-            # Spread subgenres across radial distance (90px to 360px)
-            r_sub = 90.0 + min(270.0, math.sqrt(len(members)) * 28.0)
+            # Spread subgenres across radial distance (65px to 225px)
+            r_sub = 65.0 + min(160.0, math.sqrt(len(members)) * 18.0)
             sub_center = c_center + np.array([r_sub * np.cos(ang), r_sub * np.sin(ang)], dtype=np.float32)
             for u in members:
                 node_target_centers[node_to_idx[u]] = sub_center
 
     # Seed artists with small initial jitter around their specific subgenre micro-center
     rand_ang = np.random.uniform(0, 2 * np.pi, N).astype(np.float32)
-    rand_r = np.random.uniform(8, 65, N).astype(np.float32)
+    rand_r = np.random.uniform(10, 65, N).astype(np.float32)
     pos = (node_target_centers + np.stack([rand_r * np.cos(rand_ang), rand_r * np.sin(rand_ang)], axis=1)).astype(np.float32)
 
     # 3. Vectorized Physics Simulation
     print(f"  Level 3: Vectorized archipelago spring physics ({num_iters} iterations)...")
     is_intra = (node_comm_idx[src_indices] == node_comm_idx[dst_indices])
     eff_weights = weights.copy()
-    eff_weights[~is_intra] *= 0.35
+    eff_weights[~is_intra] *= 0.50
 
     vel = np.zeros_like(pos)
     for it in range(num_iters):
@@ -222,10 +229,10 @@ def run_archipelago_layout(
     pos -= np.median(pos, axis=0)
     radii = np.linalg.norm(pos, axis=1)
     r99 = float(np.percentile(radii, 99.5)) or 1.0
-    target_radius = canvas_bound * 0.88
+    target_radius = canvas_bound * 0.92
     pos = (pos / r99) * target_radius
 
-    max_allowed = canvas_bound * 0.96
+    max_allowed = canvas_bound * 0.97
     new_radii = np.linalg.norm(pos, axis=1)
     outlier_mask = new_radii > max_allowed
     if np.any(outlier_mask):
@@ -274,8 +281,9 @@ def main():
     parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & Archipelago Layout.")
     parser.add_argument("--num-iters", type=int, default=300, help="Vectorized physics iterations (default: 300)")
     parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width (default: 6400.0)")
-    parser.add_argument("--target-continents", type=int, default=128, help="Target macro continents count (default: 128)")
-    parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter (default: 2.8 for >=128, 1.6 for 64)")
+    parser.add_argument("--target-continents", type=int, default=256, help="Target macro continents count (default: 256)")
+    parser.add_argument("--max-community-size", type=int, default=350, help="Max community size threshold for hierarchical sub-partitioning (default: 350)")
+    parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter (default: 3.5 for >=200, 2.8 for >=128, 1.6 for 64)")
     args = parser.parse_args()
 
     if not os.path.exists(EDGES_FILE) or not os.path.exists(CATALOG_FILE):
@@ -312,23 +320,64 @@ def main():
 
     print(f"Graph loaded with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
-    # 1. Topological Louvain Community Detection (Resolution 2.8 for >=128, 1.6 for 64)
+    # 1. Topological Louvain Community Detection (Resolution 3.5 for >=200, 2.8 for >=128, 1.6 for 64)
     target_res = args.resolution
     if target_res is None:
-        target_res = 2.8 if args.target_continents >= 128 else 1.6
+        target_res = 3.5 if args.target_continents >= 200 else (2.8 if args.target_continents >= 128 else 1.6)
     print(f"Detecting topological communities via Louvain modularity optimization (resolution={target_res})...")
     raw_comms = [set(c) for c in nx.community.louvain_communities(G, weight="weight", resolution=target_res, seed=42)]
     print(f"Raw Louvain communities detected: {len(raw_comms)}")
 
+    # 1B. Hierarchical Sub-Community Partitioning (Bypasses Modularity Resolution Limit)
+    def split_oversized_community(c: set, max_size: int = 350, min_size: int = 25) -> list[set]:
+        """Recursively decomposes oversized communities using local subgraph Louvain modularity."""
+        if len(c) <= max_size:
+            return [c]
+
+        subG = G.subgraph(c).copy()
+        sub_comms = [set(sc) for sc in nx.community.louvain_communities(subG, weight="weight", resolution=1.0, seed=42)]
+
+        if len(sub_comms) <= 1:
+            return [c]
+
+        major_parts = [sc for sc in sub_comms if len(sc) >= min_size]
+        slivers = [sc for sc in sub_comms if len(sc) < min_size]
+
+        if len(major_parts) < 2:
+            return [c]
+
+        # Re-integrate slivers into strongest major sibling inside this subgraph
+        for sliver in slivers:
+            for u in sliver:
+                best_target = max(major_parts, key=lambda p: sum(float(subG[u][v].get("weight", 0.1)) for v in subG.neighbors(u) if v in p))
+                best_target.add(u)
+
+        final_parts = []
+        for part in major_parts:
+            if len(part) > max_size:
+                final_parts.extend(split_oversized_community(part, max_size=max_size, min_size=min_size))
+            else:
+                final_parts.append(part)
+
+        return final_parts
+
+    if args.max_community_size and args.max_community_size > 0:
+        print(f"Applying hierarchical decomposition to oversized communities (> {args.max_community_size} artists)...")
+        split_comms = []
+        for c in raw_comms:
+            split_comms.extend(split_oversized_community(c, max_size=args.max_community_size, min_size=25))
+        print(f"Decomposed {len(raw_comms)} raw communities into {len(split_comms)} modular sub-continents.")
+        raw_comms = split_comms
+
     # Iterative Agglomerative Merge: merge smallest communities until <= target_continents and all >= 25 artists
     communities = sorted(raw_comms, key=len, reverse=True)
 
-    while len(communities) > args.target_continents or any(len(c) < 25 for c in communities):
+    while len(communities) > 1 and (len(communities) > args.target_continents or any(len(c) < 25 for c in communities)):
         c_small = min(communities, key=len)
         communities.remove(c_small)
 
         best_target = None
-        best_weight = -1.0
+        best_score = -1.0
 
         for c_candidate in communities:
             w_sum = 0.0
@@ -336,15 +385,21 @@ def main():
                 for v in G.neighbors(u):
                     if v in c_candidate:
                         w_sum += float(G[u][v].get("weight", 0.1))
-            if w_sum > best_weight:
-                best_weight = w_sum
+            if w_sum <= 0:
+                continue
+            # Density-normalized affinity score prevents giant community black-hole swallowing
+            score = w_sum / (len(c_candidate) ** 0.5)
+            if len(c_candidate) + len(c_small) > args.max_community_size:
+                score *= (args.max_community_size / (len(c_candidate) + len(c_small))) ** 2
+            if score > best_score:
+                best_score = score
                 best_target = c_candidate
 
-        if best_target is not None and best_weight > 0.0:
+        if best_target is not None and best_score > 0.0:
             best_target.update(c_small)
         else:
-            largest = max(communities, key=len)
-            largest.update(c_small)
+            smallest = min(communities, key=len)
+            smallest.update(c_small)
 
     communities = sorted(communities, key=len, reverse=True)
     print(f"Agglomerated into {len(communities)} macro-continents.")

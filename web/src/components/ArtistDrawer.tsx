@@ -6,7 +6,7 @@ import { AtlasNode } from '../types/atlas';
 const DEFAULT_ACCENT_COLOR = '#10b981';
 const SUBGENRE_BADGE_BG_PCT = 25;
 const SUBGENRE_BADGE_BORDER_PCT = 75;
-const PROGRESS_BAR_WHITE_PCT = 35;
+const PROGRESS_BAR_WHITE_PCT = 45;
 
 interface ArtistDrawerProps {
   artist: AtlasNode | null;
@@ -29,6 +29,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 }) => {
   if (!artist) return null;
 
+  // Use authentic artist continent color with 100% exact hue and tone matching the canvas
   const accentColor = artist.color || DEFAULT_ACCENT_COLOR;
   const [loadedArtistId, setLoadedArtistId] = useState<string | null>(null);
   const isImageLoaded = loadedArtistId === artist.id;
@@ -272,10 +273,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
               {subgenres.length > 0 && (
                 <span
                   style={{
-                    backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BG_PCT}%, transparent)`,
-                    borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                    backgroundColor: `color-mix(in srgb, ${accentColor} 20%, #131722)`,
+                    borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`,
                   }}
-                  className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200 truncate max-w-[110px]"
+                  className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-white truncate max-w-[110px]"
                 >
                   {subgenres[0]}
                 </span>
@@ -294,7 +295,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             disabled={!hasPreview}
             style={{
               ...(hasPreview
-                ? { backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)` }
+                ? { backgroundColor: accentColor }
                 : {})
             }}
             className={`w-9 h-9 rounded-full font-bold shadow-md transition-transform flex items-center justify-center shrink-0 ${
@@ -473,8 +474,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             zIndex: 10,
             ...(hasPreview
               ? {
-                  backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
-                  // borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                  backgroundColor: accentColor,
                 }
               : {})
           }}
@@ -517,10 +517,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     <span
                       key={idx}
                       style={{
-                        backgroundColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BG_PCT}%, transparent)`,
-                        borderColor: `color-mix(in srgb, ${accentColor} ${SUBGENRE_BADGE_BORDER_PCT}%, transparent)`,
+                        backgroundColor: `color-mix(in srgb, ${accentColor} 20%, #131722)`,
+                        borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`,
                       }}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-200"
+                      className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-white"
                     >
                       {g}
                     </span>
@@ -566,16 +566,13 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-slate-500 text-[11px]">#{idx + 1}</span>
-                        <span className="font-semibold text-white truncate group-hover:text-emerald-400 transition-colors">
+                        <span className="font-semibold text-white truncate">
                           {c.neighborName}
                         </span>
                       </div>
-                      <div
-                        className="flex items-center gap-1 text-[11px] font-bold shrink-0"
-                        style={{ color: accentColor }}
-                      >
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-white shrink-0">
                         <span>{c.sharedPlaylists}</span>
-                        <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                        <ArrowRight className="w-3 h-3" />
                       </div>
                     </div>
 

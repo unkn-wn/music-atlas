@@ -188,7 +188,7 @@ export const App: React.FC = () => {
           <div className="text-center px-4">
             <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
             <p className="text-sm text-slate-400 mt-1">
-              Rendering 49,685 artists and crossover filaments...
+              Rendering {data.nodes.length.toLocaleString()} artists and crossover filaments...
             </p>
           </div>
         </div>

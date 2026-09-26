@@ -198,7 +198,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         className="flex items-center gap-2 sm:gap-3 w-40 sm:w-56 shrink-0 cursor-pointer group select-none min-w-0"
         title={`View ${currentArtist.label} details`}
       >
-        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden relative shrink-0 bg-slate-800 shadow-md group-hover:scale-105 transition-transform">
+        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden relative shrink-0 bg-slate-800 shadow-md">
           <img
             key={currentArtist.id}
             src={currentArtist.image}
@@ -221,7 +221,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         <div className="min-w-0 flex-1 flex flex-col justify-between h-8 sm:h-9 py-0.5">
           {resolvedTitle ? (
             <div
-              className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors leading-tight"
+              className="text-xs font-bold text-white truncate leading-tight"
               title={resolvedTitle}
             >
               {resolvedTitle}

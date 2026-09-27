@@ -14,6 +14,8 @@ export const App: React.FC = () => {
     nodeMap,
     nodeIndexMap,
     continentIndicesMap,
+    sortedGlobalIndices,
+    sortedContinentIndices,
     neighborMap,
     detailsMap,
     loading,
@@ -26,6 +28,8 @@ export const App: React.FC = () => {
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const [selectedContinentId, setSelectedContinentId] = useState<number | null>(null);
+  const [densityRange, setDensityRange] = useState<[number, number] | null>(null);
+  const [connectionPercentile, setConnectionPercentile] = useState<number>(0);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
   const [showAbout, setShowAbout] = useState<boolean>(false);
@@ -98,14 +102,33 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Continent selection (clears artist selection to maintain sync)
+  // Continent selection (clears artist selection and resets rank slice to maintain sync and avoid out-of-bounds)
   const handleSelectContinent = useCallback((continentId: number | null) => {
     setSelectedContinentId(continentId);
+    setDensityRange(null);
     if (continentId !== null) {
       setSelectedArtistId(null);
       setMobileDragOffset(0);
       setIsMobileDragging(false);
     }
+  }, []);
+
+  // Popularity rank range filter selection
+  const handleSelectDensityRange = useCallback((range: [number, number] | null) => {
+    setDensityRange(range);
+    if (range !== null) {
+      setSelectedArtistId(null);
+      setMobileDragOffset(0);
+      setIsMobileDragging(false);
+    }
+  }, []);
+
+  const handleSelectConnectionPercentile = useCallback((val: number) => {
+    setConnectionPercentile(val);
+  }, []);
+
+  const handleCanvasReady = useCallback(() => {
+    setIsCanvasReady(true);
   }, []);
 
   const handleTogglePreview = useCallback((artist: AtlasNode) => {
@@ -198,15 +221,19 @@ export const App: React.FC = () => {
       <AtlasCanvas
         ref={canvasRef}
         nodes={data.nodes}
-          edges={data.edges}
-          nodeIndexMap={nodeIndexMap}
-          continentIndicesMap={continentIndicesMap}
-          neighborMap={neighborMap}
-          selectedNodeId={selectedArtistId}
-          onSelectNode={handleSelectArtist}
-          selectedContinentId={selectedContinentId}
-          onReady={() => setIsCanvasReady(true)}
-        />
+        edges={data.edges}
+        nodeIndexMap={nodeIndexMap}
+        continentIndicesMap={continentIndicesMap}
+        sortedGlobalIndices={sortedGlobalIndices}
+        sortedContinentIndices={sortedContinentIndices}
+        neighborMap={neighborMap}
+        selectedNodeId={selectedArtistId}
+        onSelectNode={handleSelectArtist}
+        selectedContinentId={selectedContinentId}
+        densityRange={densityRange}
+        connectionPercentile={connectionPercentile}
+        onReady={handleCanvasReady}
+      />
 
       {/* Sleek Floating Top Navigation Island */}
       <header
@@ -238,6 +265,10 @@ export const App: React.FC = () => {
             continents={data.continents}
             selectedContinentId={selectedContinentId}
             onSelectContinent={handleSelectContinent}
+            densityRange={densityRange}
+            onSelectDensityRange={handleSelectDensityRange}
+            connectionPercentile={connectionPercentile}
+            onSelectConnectionPercentile={handleSelectConnectionPercentile}
             align="right"
           />
 
@@ -271,6 +302,10 @@ export const App: React.FC = () => {
           continents={data.continents}
           selectedContinentId={selectedContinentId}
           onSelectContinent={handleSelectContinent}
+          densityRange={densityRange}
+          onSelectDensityRange={handleSelectDensityRange}
+          connectionPercentile={connectionPercentile}
+          onSelectConnectionPercentile={handleSelectConnectionPercentile}
           align="left"
         />
       </div>

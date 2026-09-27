@@ -14,10 +14,14 @@ interface AtlasCanvasProps {
   edges: AtlasEdge[];
   nodeIndexMap: Map<string, number>;
   continentIndicesMap: Map<number, number[]>;
+  sortedGlobalIndices: number[];
+  sortedContinentIndices: Map<number, number[]>;
   neighborMap: Map<string, string[]>;
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedContinentId: number | null;
+  densityRange: [number, number] | null;
+  connectionPercentile?: number;
   onReady?: () => void;
 }
 
@@ -114,10 +118,14 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
   edges,
   nodeIndexMap,
   continentIndicesMap,
+  sortedGlobalIndices,
+  sortedContinentIndices,
   neighborMap,
   selectedNodeId,
   onSelectNode,
   selectedContinentId,
+  densityRange,
+  connectionPercentile = 0,
   onReady
 }, ref) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -130,10 +138,16 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
 
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
   const nodeIndexMapRef = useRef(nodeIndexMap);
   nodeIndexMapRef.current = nodeIndexMap;
   const continentIndicesMapRef = useRef(continentIndicesMap);
   continentIndicesMapRef.current = continentIndicesMap;
+  const sortedGlobalIndicesRef = useRef(sortedGlobalIndices);
+  sortedGlobalIndicesRef.current = sortedGlobalIndices;
+  const sortedContinentIndicesRef = useRef(sortedContinentIndices);
+  sortedContinentIndicesRef.current = sortedContinentIndices;
   const neighborMapRef = useRef(neighborMap);
   neighborMapRef.current = neighborMap;
 
@@ -141,12 +155,37 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
   selectedNodeIdRef.current = selectedNodeId;
   const selectedContinentIdRef = useRef<number | null>(selectedContinentId);
   selectedContinentIdRef.current = selectedContinentId;
+  const densityRangeRef = useRef<[number, number] | null>(densityRange);
+  densityRangeRef.current = densityRange;
+  const connectionPercentileRef = useRef<number>(connectionPercentile);
+  connectionPercentileRef.current = connectionPercentile;
+  const activeFilterSetRef = useRef<Set<number> | null>(null);
   const initialZoomRef = useRef<number>(1.0);
   const hoveredPointIndexRef = useRef<number | null>(null);
-  const lastAppliedRef = useRef<{ nodeId: string | null; continentId: number | null }>({
+  const lastAppliedRef = useRef<{
+    nodeId: string | null;
+    continentId: number | null;
+    rangeKey: string | null;
+    connectionPercentile: number;
+  }>({
     nodeId: null,
-    continentId: null
+    continentId: null,
+    rangeKey: null,
+    connectionPercentile: 0
   });
+
+  // Pre-sort edge shared playlist counts ascending for instant O(1) percentile cutoff lookup
+  const sortedEdgePlaylists = React.useMemo(() => {
+    const list = new Uint16Array(edges.length);
+    for (let i = 0; i < edges.length; i++) {
+      list[i] = edges[i].playlists ?? 1;
+    }
+    list.sort();
+    return list;
+  }, [edges]);
+  const sortedEdgePlaylistsRef = useRef(sortedEdgePlaylists);
+  sortedEdgePlaylistsRef.current = sortedEdgePlaylists;
+
   const rafIdRef = useRef<number | null>(null);
   const animationRafIdRef = useRef<number | null>(null);
   const scheduleDrawAvatarsRef = useRef<() => void>(() => {});
@@ -177,7 +216,8 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       sourceIndex: edge.sourceIndex ?? nodeIndexMap.get(edge.source) ?? 0,
       targetIndex: edge.targetIndex ?? nodeIndexMap.get(edge.target) ?? 0,
       weight: edge.weight,
-      size: edge.size
+      size: edge.size,
+      playlists: edge.playlists ?? 1
     }));
   }, [edges, nodeIndexMap]);
 
@@ -244,6 +284,32 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
     behavior.scaleExtent([minZoom, maxZoom]);
   }, []);
 
+  // Helper to determine if a node qualifies under the currently active filter, continent, or selection
+  const isNodeQualifying = useCallback((nodeId: string, nodeIndex?: number): boolean => {
+    const currentSelectedId = selectedNodeIdRef.current;
+    if (currentSelectedId) {
+      if (nodeId === currentSelectedId) return true;
+      const neighbors = neighborMapRef.current.get(currentSelectedId);
+      return neighbors ? neighbors.includes(nodeId) : false;
+    }
+    const idx = nodeIndex !== undefined && nodeIndex >= 0
+      ? nodeIndex
+      : nodeIndexMapRef.current.get(nodeId);
+    if (idx === undefined) return false;
+
+    const activeFilter = activeFilterSetRef.current;
+    if (activeFilter && !activeFilter.has(idx)) return false;
+
+    const currentContinent = selectedContinentIdRef.current;
+    if (currentContinent !== null) {
+      const node = nodesRef.current[idx];
+      if (!node || node.continentId !== currentContinent) return false;
+    }
+    return true;
+  }, []);
+  const isNodeQualifyingRef = useRef(isNodeQualifying);
+  isNodeQualifyingRef.current = isNodeQualifying;
+
   // High-performance 2D avatar renderer strictly synced to visible labels.
   // Draws circular avatars clipped inside the node discs for only visible artists.
   const drawAvatars = useCallback(() => {
@@ -286,7 +352,6 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
     // Collect IDs of nodes that should display circular avatars:
     const visibleNodeIds = new Set<string>();
     const currentSelectedId = selectedNodeIdRef.current;
-    const currentContinent = selectedContinentIdRef.current;
     const cssLabels = cosmo._labels?._cssLabelsRenderer?._cssLabels;
 
     if (currentSelectedId) {
@@ -300,16 +365,11 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
         }
       }
     } else {
-      // 2. Global / Continent View: show avatars only for visible dynamic labels
+      // 2. Global / Continent / Density View: show avatars only for visible qualifying labels
       if (cssLabels && cssLabels.size > 0) {
         for (const [id, cssLabel] of cssLabels.entries()) {
           if (typeof cssLabel.getVisibility === 'function' && cssLabel.getVisibility()) {
-            if (currentContinent !== null) {
-              const idx = nodeIndexMap.get(id);
-              if (idx !== undefined && nodes[idx]?.continentId === currentContinent) {
-                visibleNodeIds.add(id);
-              }
-            } else {
+            if (isNodeQualifying(id)) {
               visibleNodeIds.add(id);
             }
           }
@@ -318,25 +378,18 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       // Immediate fallback: if CSS DOM elements are still resolving after deselect, pull directly from labelDataMap
       if (visibleNodeIds.size === 0 && cosmo._labels?._labelDataMap && cosmo._labels._labelDataMap.size > 0) {
         for (const [id, labelData] of cosmo._labels._labelDataMap.entries()) {
-          if (labelData && labelData.index >= 0) {
-            const node = nodes[labelData.index];
-            if (node) {
-              if (currentContinent !== null) {
-                if (node.continentId === currentContinent) visibleNodeIds.add(node.id);
-              } else {
-                visibleNodeIds.add(node.id);
-              }
-            }
+          if (labelData && isNodeQualifying(id, labelData.index)) {
+            visibleNodeIds.add(id);
           }
         }
       }
     }
 
-    // 3. Hovered artist (always included so user gets instant hover feedback)
+    // 3. Hovered artist (only if qualifying)
     const hoveredIdx = hoveredPointIndexRef.current;
     if (hoveredIdx !== null && hoveredIdx !== undefined) {
       const hoveredNode = nodes[hoveredIdx];
-      if (hoveredNode) {
+      if (hoveredNode && isNodeQualifying(hoveredNode.id, hoveredIdx)) {
         visibleNodeIds.add(hoveredNode.id);
       }
     }
@@ -468,19 +521,53 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
 
   // Atomic selection state applier: eliminates the white flash by computing incident links synchronously
   // and updating link opacities in the EXACT SAME GPU call as the highlighted link indices
-  const applySelectionState = useCallback((targetNodeId: string | null, targetContinentId: number | null = null) => {
+  const applySelectionState = useCallback((
+    targetNodeId: string | null,
+    targetContinentId: number | null = null,
+    targetDensityRange: [number, number] | null = null,
+    targetConnectionPercentile: number = 0
+  ) => {
     selectedNodeIdRef.current = targetNodeId;
     selectedContinentIdRef.current = targetContinentId;
+    densityRangeRef.current = targetDensityRange;
+    connectionPercentileRef.current = targetConnectionPercentile;
     const cosmo = cosmographRef.current as any;
     if (!cosmo) return;
     const cosmos = cosmo._cosmos;
     if (!cosmos || !cosmos.graph) return;
-    lastAppliedRef.current = { nodeId: targetNodeId, continentId: targetContinentId };
+    const targetRangeKey = targetDensityRange ? `${targetDensityRange[0]}-${targetDensityRange[1]}` : null;
+    lastAppliedRef.current = {
+      nodeId: targetNodeId,
+      continentId: targetContinentId,
+      rangeKey: targetRangeKey,
+      connectionPercentile: targetConnectionPercentile
+    };
 
     const nodeIndexMap = nodeIndexMapRef.current;
     const continentIndicesMap = continentIndicesMapRef.current;
+    const sortedGlobal = sortedGlobalIndicesRef.current;
+    const sortedContinent = sortedContinentIndicesRef.current;
+    const edges = edgesRef.current;
+    const nodes = nodesRef.current;
+
+    // Precomputed cutoff playlists from connection percentile (0-99)
+    let cutoffPlaylists = 0;
+    // Linear scaling: 0.10 at 0% (All Connections) -> 0.40 at 99% (Top 1%)
+    const t = targetConnectionPercentile / 100;
+    const dynamicLinkOpacity = 0.10 + t * 0.30;
+    const linkDefaultWidth = 0.8; // Constant width: brighter, but not bolder
+
+    if (targetConnectionPercentile > 0) {
+      const sorted = sortedEdgePlaylistsRef.current;
+      const len = sorted.length;
+      if (len > 0) {
+        const cutoffIdx = Math.min(len - 1, Math.floor((targetConnectionPercentile / 100) * len));
+        cutoffPlaylists = sorted[cutoffIdx];
+      }
+    }
 
     if (targetNodeId) {
+      activeFilterSetRef.current = null;
       const pointIndex = nodeIndexMap.get(targetNodeId);
       if (pointIndex !== undefined) {
         // 1. Synchronously get all incident links
@@ -500,6 +587,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
           linkGreyoutOpacity: 0.0,
           linkVisibilityMinTransparency: 1.0,
           linkDefaultWidth: 1.4,
+          pointGreyoutOpacity: 0.0,
         });
 
         if (cosmo._crossfilter) {
@@ -513,28 +601,163 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
           cosmo._crossfilter._linksUserActive = true;
         }
       }
-    } else if (targetContinentId !== null) {
-      const continentIndices = continentIndicesMap.get(targetContinentId) || [];
-      const continentLinks = continentLinksMapRef.current.get(targetContinentId) || [];
+    } else if (targetDensityRange !== null) {
+      // Popularity percentage slice filter active (either global or within selected continent)
+      const list = targetContinentId !== null
+        ? (sortedContinent.get(targetContinentId) || [])
+        : sortedGlobal;
+      const totalInScope = list.length;
+      const [minPct, maxPct] = targetDensityRange;
+      const startIdx = Math.round((minPct / 100) * totalInScope);
+      const endIdx = Math.min(totalInScope, Math.max(startIdx + 1, Math.round((maxPct / 100) * totalInScope)));
+      const basePoints = list.slice(startIdx, endIdx);
+
+      const inMask = new Uint8Array(nodes.length);
+      for (let i = 0; i < basePoints.length; i++) {
+        inMask[basePoints[i]] = 1;
+      }
+
+      const qualifyingLinks: number[] = [];
+      const connectedPointMask = targetConnectionPercentile > 0 ? new Uint8Array(nodes.length) : null;
+
+      for (let i = 0; i < edges.length; i++) {
+        const edge = edges[i];
+        if (cutoffPlaylists > 0 && (edge.playlists ?? 1) < cutoffPlaylists) continue;
+        const s = edge.sourceIndex ?? nodeIndexMap.get(edge.source) ?? 0;
+        const t = edge.targetIndex ?? nodeIndexMap.get(edge.target) ?? 0;
+        if (inMask[s] === 1 && inMask[t] === 1) {
+          qualifyingLinks.push(i);
+          if (connectedPointMask) {
+            connectedPointMask[s] = 1;
+            connectedPointMask[t] = 1;
+          }
+        }
+      }
+
+      // If connection strength filter is active, only show artists with surviving connections
+      const qualifyingPoints = connectedPointMask
+        ? basePoints.filter((idx) => connectedPointMask[idx] === 1)
+        : basePoints;
+
+      activeFilterSetRef.current = new Set(qualifyingPoints);
+
       cosmos.setConfigPartial({
-        highlightedPointIndices: continentIndices,
-        highlightedLinkIndices: continentLinks,
-        linkOpacity: 0.15,
+        highlightedPointIndices: qualifyingPoints,
+        highlightedLinkIndices: qualifyingLinks,
+        linkOpacity: targetConnectionPercentile > 0 ? dynamicLinkOpacity : 0.1,
         linkGreyoutOpacity: 0.0,
         linkVisibilityMinTransparency: 1.0,
-        linkDefaultWidth: 0.8,
+        linkDefaultWidth: linkDefaultWidth,
+        pointGreyoutOpacity: 0.0,
       });
+
       if (cosmo._crossfilter) {
-        cosmo._crossfilter._userSelectedPointIndices = new Set(continentIndices);
-        cosmo._crossfilter._userSelectedLinkIndices = new Set(continentLinks);
-        cosmo._crossfilter._highlightedPointIndices = new Set(continentIndices);
-        cosmo._crossfilter._highlightedLinkIndices = new Set(continentLinks);
+        cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
+        cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
         cosmo._crossfilter._pointsHighlightActive = true;
         cosmo._crossfilter._linksHighlightActive = true;
         cosmo._crossfilter._pointsUserActive = true;
         cosmo._crossfilter._linksUserActive = true;
       }
+    } else if (targetContinentId !== null) {
+      const continentIndices = continentIndicesMap.get(targetContinentId) || [];
+      const continentLinks = continentLinksMapRef.current.get(targetContinentId) || [];
+
+      let qualifyingLinks: number[];
+      let qualifyingPoints: number[];
+
+      if (targetConnectionPercentile > 0) {
+        qualifyingLinks = continentLinks.filter((i) => (edges[i].playlists ?? 1) >= cutoffPlaylists);
+        const connectedPointMask = new Uint8Array(nodes.length);
+        for (let i = 0; i < qualifyingLinks.length; i++) {
+          const edge = edges[qualifyingLinks[i]];
+          const s = edge.sourceIndex ?? nodeIndexMap.get(edge.source) ?? 0;
+          const t = edge.targetIndex ?? nodeIndexMap.get(edge.target) ?? 0;
+          connectedPointMask[s] = 1;
+          connectedPointMask[t] = 1;
+        }
+        qualifyingPoints = continentIndices.filter((idx) => connectedPointMask[idx] === 1);
+        activeFilterSetRef.current = new Set(qualifyingPoints);
+      } else {
+        qualifyingLinks = continentLinks;
+        qualifyingPoints = continentIndices;
+        activeFilterSetRef.current = null;
+      }
+
+      cosmos.setConfigPartial({
+        highlightedPointIndices: qualifyingPoints,
+        highlightedLinkIndices: qualifyingLinks,
+        linkOpacity: targetConnectionPercentile > 0 ? dynamicLinkOpacity : 0.15,
+        linkGreyoutOpacity: 0.0,
+        linkVisibilityMinTransparency: 1.0,
+        linkDefaultWidth: linkDefaultWidth,
+        pointGreyoutOpacity: targetConnectionPercentile > 0 ? 0.0 : 0.04,
+      });
+      if (cosmo._crossfilter) {
+        cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
+        cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
+        cosmo._crossfilter._pointsHighlightActive = true;
+        cosmo._crossfilter._linksHighlightActive = true;
+        cosmo._crossfilter._pointsUserActive = true;
+        cosmo._crossfilter._linksUserActive = true;
+      }
+    } else if (targetConnectionPercentile > 0) {
+      // Global view with connection strength filter: ONLY show artists with the strongest connections
+      const qualifyingLinks: number[] = [];
+      const connectedPointMask = new Uint8Array(nodes.length);
+
+      for (let i = 0; i < edges.length; i++) {
+        const edge = edges[i];
+        if ((edge.playlists ?? 1) >= cutoffPlaylists) {
+          qualifyingLinks.push(i);
+          const s = edge.sourceIndex ?? nodeIndexMap.get(edge.source) ?? 0;
+          const t = edge.targetIndex ?? nodeIndexMap.get(edge.target) ?? 0;
+          connectedPointMask[s] = 1;
+          connectedPointMask[t] = 1;
+        }
+      }
+
+      const qualifyingPoints: number[] = [];
+      for (let i = 0; i < nodes.length; i++) {
+        if (connectedPointMask[i] === 1) {
+          qualifyingPoints.push(i);
+        }
+      }
+
+      activeFilterSetRef.current = new Set(qualifyingPoints);
+
+      cosmos.setConfigPartial({
+        highlightedPointIndices: qualifyingPoints,
+        highlightedLinkIndices: qualifyingLinks,
+        linkOpacity: dynamicLinkOpacity,
+        linkGreyoutOpacity: 0.0,
+        linkVisibilityMinTransparency: 1.0,
+        linkDefaultWidth: linkDefaultWidth,
+        pointGreyoutOpacity: 0.0,
+      });
+
+      if (cosmo._crossfilter) {
+        cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
+        cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
+        cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
+        cosmo._crossfilter._pointsHighlightActive = true;
+        cosmo._crossfilter._linksHighlightActive = true;
+        cosmo._crossfilter._pointsUserActive = true;
+        cosmo._crossfilter._linksUserActive = true;
+        if (cosmo._crossfilter._pointsSelection?.clauses) {
+          cosmo._crossfilter._pointsSelection.clauses.length = 0;
+        }
+        if (cosmo._crossfilter._linksSelection?.clauses) {
+          cosmo._crossfilter._linksSelection.clauses.length = 0;
+        }
+      }
     } else {
+      activeFilterSetRef.current = null;
       // Unselected state: restore delicate translucent filaments (18% opacity, hairline 0.8px, no distance cut)
       cosmos.setConfigPartial({
         highlightedPointIndices: void 0,
@@ -543,6 +766,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
         linkGreyoutOpacity: 0.0,
         linkVisibilityMinTransparency: 1.0,
         linkDefaultWidth: 0.8,
+        pointGreyoutOpacity: 1.0,
       });
       if (cosmo._crossfilter) {
         cosmo._crossfilter._userSelectedPointIndices.clear();
@@ -562,6 +786,8 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       }
     }
 
+    cosmos.requestRender();
+
     // Immediately clear stale relation labels from previous selection and re-render for new selection
     if (cosmo._labels) {
       try {
@@ -580,8 +806,10 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
     }
 
     scheduleDrawAvatars();
-    setTimeout(scheduleDrawAvatars, 80);
-    setTimeout(scheduleDrawAvatars, 250);
+    if (targetNodeId || targetDensityRange !== null || targetContinentId !== null) {
+      setTimeout(scheduleDrawAvatars, 80);
+      setTimeout(scheduleDrawAvatars, 250);
+    }
   }, [scheduleDrawAvatars]);
 
   // Initialize Cosmograph WebGL2 graph engine
@@ -654,6 +882,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       enableSimulation: false, // Freezes precomputed ForceAtlas2 layout
       selectPointOnClick: false, // Managed atomically via applySelectionState to eliminate edge flash
       selectPointOnLabelClick: false, // Managed atomically via applySelectionState to eliminate edge flash
+      resetSelectionOnEmptyCanvasClick: false, // Prevents background click from resetting selection and filter state
       backgroundColor: '#07090e',
       onZoom: () => {
         const cosmo = cosmographRef.current as any;
@@ -681,26 +910,63 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       onClick: (index: number | undefined) => {
         if (index !== undefined) {
           const node = nodesRef.current[index];
-          if (node) {
-            applySelectionState(node.id, selectedContinentIdRef.current);
+          if (node && isNodeQualifyingRef.current(node.id, index)) {
+            applySelectionState(node.id, selectedContinentIdRef.current, densityRangeRef.current, connectionPercentileRef.current);
             onSelectNodeRef.current(node.id);
+            return;
           }
-        } else {
-          applySelectionState(null, selectedContinentIdRef.current);
-          onSelectNodeRef.current(null);
         }
+        applySelectionState(null, selectedContinentIdRef.current, densityRangeRef.current, connectionPercentileRef.current);
+        onSelectNodeRef.current(null);
       }
     });
 
-    // Hook Cosmograph's internal _labels._renderLabels to keep avatars in sync
+    // Hook Cosmograph's internal _labels to keep avatars in sync and intercept labels renderer to strip hidden labels
     const hookLabels = (l: any) => {
-      if (!l || l.__origRenderLabels) return;
-      const origRender = l._renderLabels.bind(l);
-      l.__origRenderLabels = origRender;
-      l._renderLabels = () => {
-        origRender();
-        scheduleDrawAvatars();
+      if (!l) return;
+
+      const hookRenderer = (renderer: any) => {
+        if (!renderer || renderer.__origSetLabels) return;
+        const origSet = renderer.setLabels.bind(renderer);
+        renderer.__origSetLabels = origSet;
+        renderer.setLabels = (labels: any[]) => {
+          if (!Array.isArray(labels)) return origSet(labels);
+          const filtered = labels.filter((lbl: any) => {
+            if (!lbl || !lbl.id) return false;
+            if (typeof lbl.id === 'string' && lbl.id.startsWith('cluster-')) return true;
+            const isHidden = typeof lbl.className === 'string' && (
+              lbl.className.includes('cosmographLabelHidden') ||
+              lbl.className.includes('LabelHidden')
+            );
+            if (isHidden) return false;
+            return isNodeQualifyingRef.current(lbl.id);
+          });
+          return origSet(filtered);
+        };
       };
+
+      if (l._cssLabelsRenderer) hookRenderer(l._cssLabelsRenderer);
+      let currentRenderer = l._cssLabelsRenderer;
+      Object.defineProperty(l, '_cssLabelsRenderer', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return currentRenderer;
+        },
+        set(val) {
+          currentRenderer = val;
+          if (val) hookRenderer(val);
+        }
+      });
+
+      if (!l.__origRenderLabels) {
+        const origRender = l._renderLabels.bind(l);
+        l.__origRenderLabels = origRender;
+        l._renderLabels = () => {
+          origRender();
+          scheduleDrawAvatars();
+        };
+      }
     };
 
     let currentLabels = (cosmograph as any)._labels;
@@ -838,17 +1104,20 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       cosmo.zoomToPoint(index, 750);
       runAnimationLoop(800);
     }
-  }));
+  }), [runAnimationLoop, applyZoomLimits, getZoomScale]);
 
   // Synchronize React selection state with Cosmograph GPU shader selection
+  const rangeKey = densityRange ? `${densityRange[0]}-${densityRange[1]}` : null;
   useEffect(() => {
     if (
       lastAppliedRef.current.nodeId !== selectedNodeId ||
-      lastAppliedRef.current.continentId !== selectedContinentId
+      lastAppliedRef.current.continentId !== selectedContinentId ||
+      lastAppliedRef.current.rangeKey !== rangeKey ||
+      lastAppliedRef.current.connectionPercentile !== connectionPercentile
     ) {
-      applySelectionState(selectedNodeId, selectedContinentId);
+      applySelectionState(selectedNodeId, selectedContinentId, densityRange, connectionPercentile);
     }
-  }, [selectedNodeId, selectedContinentId, applySelectionState]);
+  }, [selectedNodeId, selectedContinentId, rangeKey, densityRange, connectionPercentile, applySelectionState]);
 
   // Listen to window resizes to update avatar canvas dimensions
   useEffect(() => {

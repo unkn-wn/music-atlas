@@ -44,6 +44,7 @@ export interface AtlasEdge {
   targetIndex?: number;
   weight: number;
   size: number;
+  playlists?: number;
   isBridge?: boolean;
 }
 
@@ -68,4 +69,6 @@ export interface AtlasGraphBundle {
   nodes: AtlasNode[];
   edges: AtlasEdge[];
 }
+
+export type DensityRange = [number, number];
 

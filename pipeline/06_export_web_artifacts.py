@@ -236,7 +236,8 @@ def main():
             "source": src,
             "target": dst,
             "weight": round(float(e["weight"]), 4),
-            "size": max(0.08, round(e["weight"] * 0.9, 2))
+            "size": max(0.08, round(e["weight"] * 0.9, 2)),
+            "playlists": int(e.get("rawSharedPlaylists", 1))
         }
         if e.get("isBridge"):
             edge_dict["isBridge"] = True

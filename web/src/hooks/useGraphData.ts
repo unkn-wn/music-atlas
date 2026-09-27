@@ -51,6 +51,8 @@ export function useGraphData() {
   const [nodeMap, setNodeMap] = useState<Map<string, AtlasNode>>(new Map());
   const [nodeIndexMap, setNodeIndexMap] = useState<Map<string, number>>(new Map());
   const [continentIndicesMap, setContinentIndicesMap] = useState<Map<number, number[]>>(new Map());
+  const [sortedGlobalIndices, setSortedGlobalIndices] = useState<number[]>([]);
+  const [sortedContinentIndices, setSortedContinentIndices] = useState<Map<number, number[]>>(new Map());
   const [neighborMap, setNeighborMap] = useState<Map<string, string[]>>(new Map());
   const [detailsMap, setDetailsMap] = useState<Record<string, ArtistDetail>>({});
   const [loading, setLoading] = useState<boolean>(true);
@@ -129,7 +131,7 @@ export function useGraphData() {
         setLoading(true);
         let bundle: AtlasGraphBundle;
         // Fast native streaming decompression from /data/atlas-graph.json.gz (6.17 MB vs 30.7 MB)
-        const gzResp = await fetch('/data/atlas-graph.json.gz');
+        const gzResp = await fetch('/data/atlas-graph.json.gz?v=2');
         if (gzResp.ok) {
           const contentEncoding = gzResp.headers.get('content-encoding');
           if (contentEncoding === 'gzip') {
@@ -147,7 +149,7 @@ export function useGraphData() {
             bundle = await gzResp.json();
           }
         } else {
-          const resp = await fetch('/data/atlas-graph.json');
+          const resp = await fetch('/data/atlas-graph.json?v=2');
           if (!resp.ok) {
             throw new Error(`Failed to load atlas-graph data (status ${resp.status})`);
           }
@@ -231,11 +233,23 @@ export function useGraphData() {
 
         bundle.edges = validEdges;
 
+        // Pre-sort node indices descending by subscribers for O(1) top-artist filtering
+        const globalSorted = Array.from({ length: bundle.nodes.length }, (_, i) => i)
+          .sort((a, b) => (bundle.nodes[b].subscribers || 0) - (bundle.nodes[a].subscribers || 0));
+
+        const continentSorted = new Map<number, number[]>();
+        cIndicesMap.forEach((indices, cId) => {
+          const sorted = [...indices].sort((a, b) => (bundle.nodes[b].subscribers || 0) - (bundle.nodes[a].subscribers || 0));
+          continentSorted.set(cId, sorted);
+        });
+
         if (isMounted) {
           setData(bundle);
           setNodeMap(nMap);
           setNodeIndexMap(nIndexMap);
           setContinentIndicesMap(cIndicesMap);
+          setSortedGlobalIndices(globalSorted);
+          setSortedContinentIndices(continentSorted);
           setNeighborMap(nbrMap);
           setLoading(false);
         }
@@ -259,6 +273,8 @@ export function useGraphData() {
     nodeMap,
     nodeIndexMap,
     continentIndicesMap,
+    sortedGlobalIndices,
+    sortedContinentIndices,
     neighborMap,
     detailsMap,
     loading,

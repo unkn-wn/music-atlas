@@ -284,14 +284,8 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
     behavior.scaleExtent([minZoom, maxZoom]);
   }, []);
 
-  // Helper to determine if a node qualifies under the currently active filter, continent, or selection
+  // Helper to determine if a node qualifies under the currently active filter or continent
   const isNodeQualifying = useCallback((nodeId: string, nodeIndex?: number): boolean => {
-    const currentSelectedId = selectedNodeIdRef.current;
-    if (currentSelectedId) {
-      if (nodeId === currentSelectedId) return true;
-      const neighbors = neighborMapRef.current.get(currentSelectedId);
-      return neighbors ? neighbors.includes(nodeId) : false;
-    }
     const idx = nodeIndex !== undefined && nodeIndex >= 0
       ? nodeIndex
       : nodeIndexMapRef.current.get(nodeId);
@@ -385,19 +379,22 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       }
     }
 
-    // 3. Hovered artist (only if qualifying)
+    // 3. Hovered artist: always display avatar and label when hovering over any visible artist
     const hoveredIdx = hoveredPointIndexRef.current;
     if (hoveredIdx !== null && hoveredIdx !== undefined) {
       const hoveredNode = nodes[hoveredIdx];
-      if (hoveredNode && isNodeQualifying(hoveredNode.id, hoveredIdx)) {
+      if (hoveredNode) {
         visibleNodeIds.add(hoveredNode.id);
       }
     }
 
-    // 1. Sort visible nodes by size ascending so larger artists & avatars are drawn on top
-    const sortedVisibleIds = Array.from(visibleNodeIds).sort(
-      (a, b) => (nodeIndexMap.get(a) ?? 0) - (nodeIndexMap.get(b) ?? 0)
-    );
+    // 1. Sort visible nodes by size ascending, ensuring hovered artist is drawn last on top of all others
+    const hoveredId = hoveredIdx !== null && hoveredIdx !== undefined ? nodes[hoveredIdx]?.id : null;
+    const sortedVisibleIds = Array.from(visibleNodeIds).sort((a, b) => {
+      if (a === hoveredId) return 1;
+      if (b === hoveredId) return -1;
+      return (nodeIndexMap.get(a) ?? 0) - (nodeIndexMap.get(b) ?? 0);
+    });
 
     interface LabelToDraw {
       text: string;
@@ -427,6 +424,16 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
       const radius = diameter / 2;
       const avatarRadius = Math.max(2.0, radius - 1.2);
       const isHovered = hasFinePointer && hoveredIdx !== null && hoveredIdx !== undefined && nodes[hoveredIdx]?.id === id;
+
+      // Draw base solid disc for hovered node so it instantly brightens from dimmed background state
+      if (isHovered) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sx, sy, avatarRadius, 0, Math.PI * 2);
+        ctx.fillStyle = node.color || '#38bdf8';
+        ctx.fill();
+        ctx.restore();
+      }
 
       if (node.image) {
         const img = getAvatarImage(node.image, () => scheduleDrawAvatarsRef.current());
@@ -587,7 +594,7 @@ export const AtlasCanvas = React.memo(forwardRef<AtlasCanvasHandle, AtlasCanvasP
           linkGreyoutOpacity: 0.0,
           linkVisibilityMinTransparency: 1.0,
           linkDefaultWidth: 1.4,
-          pointGreyoutOpacity: 0.0,
+          pointGreyoutOpacity: 0.15,
         });
 
         if (cosmo._crossfilter) {

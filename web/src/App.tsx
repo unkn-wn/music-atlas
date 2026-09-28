@@ -1,12 +1,24 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
-import { Radio, ZoomIn, ZoomOut, Maximize2, Sparkles, Info, Loader2, X } from 'lucide-react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { Radio, ZoomIn, ZoomOut, Maximize2, Info, Loader2 } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
 import { SearchBar } from './components/SearchBar';
 import { ControlHUD } from './components/ControlHUD';
 import { ArtistDrawer } from './components/ArtistDrawer';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
+import { AboutModal } from './components/AboutModal';
 import { AtlasNode } from './types/atlas';
+import { hydrateArtistDetails } from './utils/artistUtils';
+
+const STORAGE_KEY_SEEN_ABOUT = 'music_atlas_has_seen_about';
+
+function getInitialShowAbout(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_SEEN_ABOUT) !== 'true';
+  } catch {
+    return false;
+  }
+}
 
 export const App: React.FC = () => {
   const {
@@ -32,13 +44,22 @@ export const App: React.FC = () => {
   const [connectionPercentile, setConnectionPercentile] = useState<number>(0);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
   const [activeAudioArtist, setActiveAudioArtist] = useState<AtlasNode | null>(null);
-  const [showAbout, setShowAbout] = useState<boolean>(false);
+  const [showAbout, setShowAbout] = useState<boolean>(getInitialShowAbout);
   const [isCanvasReady, setIsCanvasReady] = useState<boolean>(false);
   const [mobileDragOffset, setMobileDragOffset] = useState<number>(0);
   const [isMobileDragging, setIsMobileDragging] = useState<boolean>(false);
 
+  const handleCloseAbout = useCallback(() => {
+    setShowAbout(false);
+    try {
+      localStorage.setItem(STORAGE_KEY_SEEN_ABOUT, 'true');
+    } catch {
+      // Graceful fallback if localStorage is disabled or restricted
+    }
+  }, []);
+
   // Fetch continent details on demand when an artist is selected
-  React.useEffect(() => {
+  useEffect(() => {
     if (!selectedArtistId) return;
     const node = nodeMap.get(selectedArtistId);
     if (node && node.continentId) {
@@ -47,7 +68,7 @@ export const App: React.FC = () => {
   }, [selectedArtistId, nodeMap, loadContinentDetails]);
 
   // Fetch continent details on demand when an active audio preview starts
-  React.useEffect(() => {
+  useEffect(() => {
     if (!activeAudioArtist) return;
     const node = nodeMap.get(activeAudioArtist.id);
     if (node && node.continentId) {
@@ -58,39 +79,15 @@ export const App: React.FC = () => {
   // Selected artist object with merged details & hydrated crossover metadata
   const selectedArtist = useMemo(() => {
     if (!selectedArtistId) return null;
-    const base = nodeMap.get(selectedArtistId);
-    if (!base) return null;
-    const details = detailsMap[selectedArtistId];
-    if (!details) {
-      return {
-        ...base,
-        spotifyUrl: `https://open.spotify.com/search/${encodeURIComponent(base.label || '')}`
-      };
-    }
-    const resolvedCrossovers = details.topCrossovers?.map((c) => ({
-      ...c,
-      neighborName: nodeMap.get(c.neighborId)?.label || c.neighborName || c.neighborId,
-      image: nodeMap.get(c.neighborId)?.image || c.image || ''
-    }));
-    return {
-      ...base,
-      ...details,
-      topCrossovers: resolvedCrossovers,
-      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(base.label || '')}`
-    };
+    const base = nodeMap.get(selectedArtistId) || null;
+    return hydrateArtistDetails(base, detailsMap[selectedArtistId], nodeMap);
   }, [nodeMap, selectedArtistId, detailsMap]);
 
   // Active audio artist merged with details if available
   const mergedAudioArtist = useMemo(() => {
     if (!activeAudioArtist) return null;
-    const details = detailsMap[activeAudioArtist.id];
-    if (!details) return activeAudioArtist;
-    return {
-      ...activeAudioArtist,
-      ...details,
-      spotifyUrl: details.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(activeAudioArtist.label || '')}`
-    };
-  }, [activeAudioArtist, detailsMap]);
+    return hydrateArtistDetails(activeAudioArtist, detailsMap[activeAudioArtist.id], nodeMap);
+  }, [activeAudioArtist, detailsMap, nodeMap]);
 
   // Immediate, synchronous artist selection
   const handleSelectArtist = useCallback((id: string | null, shouldFly: boolean = false) => {
@@ -148,7 +145,7 @@ export const App: React.FC = () => {
   activeAudioArtistRef.current = activeAudioArtist;
 
   // Global keyboard shortcuts (Escape to deselect artist or close modal, Space to toggle active audio preview)
-  React.useEffect(() => {
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const isInputFocused =
@@ -159,7 +156,7 @@ export const App: React.FC = () => {
 
       if (e.key === 'Escape') {
         if (showAbout) {
-          setShowAbout(false);
+          handleCloseAbout();
           return;
         }
         if (!isInputFocused) {
@@ -177,14 +174,14 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showAbout]);
+  }, [showAbout, handleCloseAbout]);
 
   if (error) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4 text-center px-4">
         <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 max-w-md">
           <h2 className="text-base font-bold mb-1">Failed to load Atlas Graph</h2>
-          <p className="text-xs text-slate-400">{error || "Graph data unavailable"}</p>
+          <p className="text-xs text-slate-400">{error || 'Graph data unavailable'}</p>
         </div>
       </div>
     );
@@ -196,7 +193,9 @@ export const App: React.FC = () => {
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center px-4">
           <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
-          <p className="text-sm text-slate-400 mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
+          <p className="text-sm text-slate-400 mt-1">
+            Spatializing cosmic artists across EveryNoise community playlists...
+          </p>
         </div>
       </div>
     );
@@ -204,7 +203,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#07090e] select-none">
-      {/* Full-Screen Loading Overlay: Stays active and spinning until Cosmograph is fully initialized, uploaded to GPU, and rendered */}
+      {/* Full-Screen Loading Overlay */}
       {!isCanvasReady && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#07090e] gap-4 pointer-events-auto">
           <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
@@ -235,7 +234,7 @@ export const App: React.FC = () => {
         onReady={handleCanvasReady}
       />
 
-      {/* Sleek Floating Top Navigation Island */}
+      {/* Floating Top Navigation Island */}
       <header
         style={{ top: 'max(1rem, env(safe-area-inset-top))' }}
         className="absolute left-4 right-4 z-50 flex items-center justify-between gap-2 sm:gap-4 pointer-events-none"
@@ -343,7 +342,12 @@ export const App: React.FC = () => {
 
       {/* Mobile: Top-Right Beneath Header */}
       <div
-        style={{ position: 'fixed', top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)', right: '16px', zIndex: 30 }}
+        style={{
+          position: 'fixed',
+          top: 'calc(max(1rem, env(safe-area-inset-top)) + 48px)',
+          right: '16px',
+          zIndex: 30
+        }}
         className="flex sm:hidden pointer-events-auto flex-col items-center bg-[#07090e]/70 backdrop-blur-xl border border-white/10 rounded-2xl p-1 shadow-2xl"
       >
         <button
@@ -371,7 +375,7 @@ export const App: React.FC = () => {
         </button>
       </div>
 
-      {/* Bottom Container for Mobile Sheet & Persistent Audio Player (Single Instance in DOM) */}
+      {/* Bottom Container for Mobile Sheet & Persistent Audio Player */}
       <div className="fixed z-[60] pointer-events-none bottom-0 left-0 right-0 w-full flex flex-col items-center justify-end md:contents">
         {/* Single Persistent Audio Player Bar */}
         {activeAudioArtist && (
@@ -379,14 +383,16 @@ export const App: React.FC = () => {
             style={{
               marginBottom: selectedArtist ? '6px' : 'max(12px, env(safe-area-inset-bottom))',
               transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
-              transition: isMobileDragging ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1), margin 0.3s ease-out'
+              transition: isMobileDragging
+                ? 'none'
+                : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1), margin 0.3s ease-out'
             }}
             className="pointer-events-auto px-3 sm:px-4 w-full max-w-2xl flex justify-center md:fixed md:bottom-6 md:left-0 md:right-0 md:mx-auto md:mb-0 md:z-[60]"
           >
             <AudioPlayerBar
               currentArtist={mergedAudioArtist}
               isPlaying={isPlayingAudio}
-              onTogglePlay={() => setIsPlayingAudio(!isPlayingAudio)}
+              onTogglePlay={() => setIsPlayingAudio((prev) => !prev)}
               onSelectArtist={(id) => handleSelectArtist(id, true)}
               onClose={() => {
                 setIsPlayingAudio(false);
@@ -396,12 +402,14 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Single Floating Artist Inspector: Desktop Slide-over Drawer & Mobile Native Bottom Sheet */}
+        {/* Single Floating Artist Inspector */}
         {selectedArtist && (
           <div
             style={{
               transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
-              transition: isMobileDragging ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
+              transition: isMobileDragging
+                ? 'none'
+                : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
             }}
             className="pointer-events-auto w-full md:w-auto md:fixed md:top-[72px] md:bottom-24 md:right-4 lg:right-6 md:z-[60] flex justify-center md:justify-end"
           >
@@ -423,77 +431,7 @@ export const App: React.FC = () => {
       </div>
 
       {/* About Modal */}
-      {showAbout && (
-        <div
-          onClick={() => setShowAbout(false)}
-          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pointer-events-auto"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="glass-panel max-w-lg w-full p-6 shadow-2xl relative border border-white/20 rounded-2xl flex flex-col gap-4"
-          >
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-emerald-400" />
-                About Music Atlas
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowAbout(false)}
-                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                title="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Music Atlas is an attempt at visualizing the global music streaming landscape, gathering genres from EveryNoise and public YouTube Music user playlists, with artist information from Deezer. The goal is to see common and similar artists that each user would listen to.
-            </p>
-
-            <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 flex flex-col gap-2.5 text-xs text-slate-300">
-              <div className="flex items-start gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 mt-1 shrink-0 shadow-sm" />
-                <div>
-                  <strong className="text-white font-semibold">Dot</strong> — a music artist, larger meaning more popular and more fans (data from Deezer)
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5">
-                <span className="w-2.5 h-0.5 bg-cyan-400 mt-2 shrink-0 shadow-sm" />
-                <div>
-                  <strong className="text-white font-semibold">Line</strong> — a connection between two artists, showing up in a significant amount of similar playlists
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-gradient-to-tr from-purple-400 to-pink-400 mt-1 shrink-0 shadow-sm" />
-                <div>
-                  <strong className="text-white font-semibold">Color</strong> — a group of genres, defined by EveryNoise subgenres and results from YouTube
-                </div>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Let me know if there are any bugs or issues at{' '}
-              <a
-                href="mailto:leon.mofx@gmail.com"
-                className="text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
-              >
-                leon.mofx@gmail.com
-              </a>
-              ! Inspired by the Twitch Atlas.
-            </p>
-
-            <button
-              onClick={() => setShowAbout(false)}
-              className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
-            >
-              Enter the Atlas
-            </button>
-          </div>
-        </div>
-      )}
+      <AboutModal isOpen={showAbout} onClose={handleCloseAbout} />
     </div>
   );
 };

@@ -1,11 +1,11 @@
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { X, Play, Pause, ExternalLink, Disc3, ArrowRight, ChevronUp } from 'lucide-react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
+import { X, Play, Pause, ExternalLink, Disc3, ArrowRight } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
+import { useBottomSheetGesture } from '../hooks/useBottomSheetGesture';
+import { resolveArtistImageUrl, DEFAULT_FALLBACK_AVATAR } from '../utils/imageUtils';
+import { filterValidSubgenres, formatSubscriberCount } from '../utils/artistUtils';
 
-// Accent styling constants for artist drawer elements
 const DEFAULT_ACCENT_COLOR = '#10b981';
-const SUBGENRE_BADGE_BG_PCT = 25;
-const SUBGENRE_BADGE_BORDER_PCT = 75;
 const PROGRESS_BAR_WHITE_PCT = 45;
 
 interface ArtistDrawerProps {
@@ -33,174 +33,37 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
   const accentColor = artist.color || DEFAULT_ACCENT_COLOR;
   const [loadedArtistId, setLoadedArtistId] = useState<string | null>(null);
   const isImageLoaded = loadedArtistId === artist.id;
-  const [snapState, setSnapState] = useState<'peek' | 'expanded'>('peek');
-  const [dragOffsetY, setDragOffsetY] = useState<number>(0);
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const dragStartRef = useRef<{
-    startY: number;
-    startTime: number;
-    initialSnap: 'peek' | 'expanded';
-    isContentScroll: boolean;
-  } | null>(null);
 
-  const handleDragUpdate = useCallback((offset: number, dragging: boolean) => {
-    setDragOffsetY(offset);
-    setIsDragging(dragging);
-    if (onDragStateChange) {
-      onDragStateChange(offset, dragging);
-    }
-  }, [onDragStateChange]);
-
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    if (
-      target.closest('button') ||
-      target.closest('a') ||
-      target.closest('input') ||
-      target.closest('textarea')
-    ) {
-      return;
-    }
-
-    const touch = e.touches[0];
-    const isInsideContent = contentRef.current && contentRef.current.contains(target);
-    const scrollTop = contentRef.current?.scrollTop || 0;
-
-    dragStartRef.current = {
-      startY: touch.clientY,
-      startTime: Date.now(),
-      initialSnap: snapState,
-      isContentScroll: Boolean(isInsideContent && scrollTop > 0)
-    };
-    handleDragUpdate(0, true);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current) return;
-    const touch = e.touches[0];
-    const deltaY = touch.clientY - dragStartRef.current.startY;
-    const scrollTop = contentRef.current?.scrollTop || 0;
-
-    if (dragStartRef.current.isContentScroll) {
-      if (scrollTop <= 0 && deltaY > 0) {
-        dragStartRef.current.isContentScroll = false;
-        dragStartRef.current.startY = touch.clientY;
-      } else {
-        return;
-      }
-    }
-
-    if (dragStartRef.current.initialSnap === 'expanded') {
-      if (deltaY < 0) {
-        // Rubber-band resistance when pulling up past expanded
-        handleDragUpdate(deltaY * 0.2, true);
-      } else {
-        // Dragging downward towards peek
-        handleDragUpdate(deltaY, true);
-      }
-    } else {
-      // In peek mode
-      if (deltaY < 0) {
-        // Dragging upward towards expanded
-        handleDragUpdate(deltaY, true);
-      } else {
-        // Dragging downward below peek with gentle damping
-        handleDragUpdate(deltaY * 0.8, true);
-      }
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current) return;
-    const touch = e.changedTouches[0];
-    const deltaY = touch.clientY - dragStartRef.current.startY;
-    const deltaTime = Math.max(1, Date.now() - dragStartRef.current.startTime);
-    const velocityY = deltaY / deltaTime; // px/ms
-
-    const initial = dragStartRef.current.initialSnap;
-    dragStartRef.current = null;
-    handleDragUpdate(0, false);
-
-    if (initial === 'peek') {
-      // From PEEK:
-      // Dragging UP -> Snap to EXPANDED
-      if (deltaY < -40 || velocityY < -0.3) {
-        setSnapState('expanded');
-      }
-      // Dragging DOWN -> Dismiss ONLY if deliberately pulled down past 90px or fast downward swipe
-      else if (deltaY > 90 || velocityY > 0.6) {
-        onClose();
-      }
-      // Otherwise spring back to peek
-    } else {
-      // From EXPANDED:
-      // Dragging DOWN -> ALWAYS snap to PEEK (never dismiss directly from expanded)
-      if (deltaY > 60 || velocityY > 0.35) {
-        setSnapState('peek');
-      }
-      // Otherwise spring back to expanded
-    }
-  };
-
-  // Reset inner scroll when collapsing to peek
-  useEffect(() => {
-    if (snapState === 'peek' && contentRef.current) {
-      contentRef.current.scrollTop = 0;
-    }
-  }, [snapState]);
+  const {
+    snapState,
+    setSnapState,
+    dragOffsetY,
+    isDragging,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd
+  } = useBottomSheetGesture({
+    onClose,
+    onDragStateChange,
+    contentRef
+  });
 
   const isCurrentPlaying = isPlayingPreview && currentlyPlayingId === artist.id;
 
-  // Display adaptive connections without arbitrary 10-item truncation (retains adaptive 6 to 20 connections)
+  // Display adaptive connections without arbitrary truncation
   const displayedNeighbors = useMemo(() => {
     if (!artist.topCrossovers) return [];
     return [...artist.topCrossovers].sort(
-      (a, b) => (b.sharedPlaylists - a.sharedPlaylists) || (b.cosineSimilarity - a.cosineSimilarity)
+      (a, b) => b.sharedPlaylists - a.sharedPlaylists || b.cosineSimilarity - a.cosineSimilarity
     );
   }, [artist.topCrossovers]);
 
   const maxShared = displayedNeighbors.length > 0 ? displayedNeighbors[0].sharedPlaylists : 1;
-
-  const subscriberDisplay = useMemo(() => {
-    if (artist.subscribersFormatted) return artist.subscribersFormatted;
-    const subs = artist.subscribers ?? 0;
-    if (subs >= 1_000_000) return `${(subs / 1_000_000).toFixed(1)}M`;
-    if (subs >= 1_000) return `${(subs / 1_000).toFixed(1)}K`;
-    return subs.toLocaleString();
-  }, [artist.subscribersFormatted, artist.subscribers]);
-
-  const subgenres = useMemo(() => {
-    const list = artist.topSubgenres || [];
-    return list.filter(
-      (g) => g && !['other', 'artist', 'unknown', 'eclectic'].includes(g.trim().toLowerCase())
-    );
-  }, [artist.topSubgenres]);
-
+  const subscriberDisplay = formatSubscriberCount(artist.subscribers, artist.subscribersFormatted);
+  const subgenres = useMemo(() => filterValidSubgenres(artist.topSubgenres), [artist.topSubgenres]);
   const hasPreview = Boolean(artist.id || artist.label);
-
-  const sidebarImageUrl = useMemo(() => {
-    if (!artist.image) return '';
-    let url = artist.image.trim();
-    if (url.startsWith('//')) {
-      url = 'https:' + url;
-    }
-    // Deezer CDN image: ensure crisp 500x500 portrait
-    if (url.includes('dzcdn.net')) {
-      return url.replace(/\d+x\d+-/, '500x500-');
-    }
-    // Upgrade Google CDN image to crisp 512x512 portrait
-    if (url.includes('googleusercontent.com') || url.includes('ggpht.com')) {
-      const base = url.split('=')[0];
-      return `${base}=s512-c-k-c0x00ffffff-no-rj`;
-    }
-    // Upgrade iTunes artwork to 600x600
-    if (url.includes('mzstatic.com')) {
-      return url.replace(/\d+x\d+bb/, '600x600bb');
-    }
-    return url;
-  }, [artist.image]);
+  const sidebarImageUrl = useMemo(() => resolveArtistImageUrl(artist.image), [artist.image]);
 
   return (
     <div
@@ -211,13 +74,20 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
       style={{
-        height: snapState === 'expanded' ? '82dvh' : 'calc(185px + env(safe-area-inset-bottom, 0px))',
-        transform: onDragStateChange ? undefined : (isDragging && dragOffsetY !== 0 ? `translateY(${dragOffsetY}px)` : 'translateY(0px)'),
-        transition: isDragging ? 'none' : 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1), transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
+        height:
+          snapState === 'expanded' ? '82dvh' : 'calc(185px + env(safe-area-inset-bottom, 0px))',
+        transform: onDragStateChange
+          ? undefined
+          : isDragging && dragOffsetY !== 0
+          ? `translateY(${dragOffsetY}px)`
+          : 'translateY(0px)',
+        transition: isDragging
+          ? 'none'
+          : 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1), transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
       }}
       className="glass-panel w-full md:w-72 lg:w-96 shadow-2xl flex flex-col md:!h-[calc(100vh-10.5rem)] md:!transform-none overflow-hidden pointer-events-auto rounded-t-2xl md:rounded-2xl border-t md:border-l border-white/15 relative"
     >
-      {/* Mobile iOS Sheet Grab Handle (Floating overlay at top) */}
+      {/* Mobile iOS Sheet Grab Handle */}
       <div
         onClick={(e) => {
           e.stopPropagation();
@@ -229,9 +99,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
       </div>
 
       {/* Mobile Compact Artist Header */}
-      <div
-        className="md:hidden px-3.5 pt-3.5 pb-2.5 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none relative"
-      >
+      <div className="md:hidden px-3.5 pt-3.5 pb-2.5 flex items-center justify-between gap-3 border-b border-white/10 shrink-0 select-none relative">
         <div
           className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
           onClick={(e) => {
@@ -245,7 +113,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             style={{ borderColor: accentColor }}
           >
             <img
-              src={sidebarImageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
+              src={sidebarImageUrl || DEFAULT_FALLBACK_AVATAR}
               alt={artist.label}
               referrerPolicy="no-referrer"
               crossOrigin="anonymous"
@@ -255,7 +123,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                 if (artist.image && target.src !== artist.image) {
                   target.src = artist.image;
                 } else {
-                  target.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80';
+                  target.src = DEFAULT_FALLBACK_AVATAR;
                 }
               }}
             />
@@ -274,7 +142,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                 <span
                   style={{
                     backgroundColor: `color-mix(in srgb, ${accentColor} 20%, #131722)`,
-                    borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`,
+                    borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`
                   }}
                   className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-white truncate max-w-[110px]"
                 >
@@ -294,18 +162,16 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             }}
             disabled={!hasPreview}
             style={{
-              ...(hasPreview
-                ? { backgroundColor: accentColor }
-                : {})
+              ...(hasPreview ? { backgroundColor: accentColor } : {})
             }}
             className={`w-9 h-9 rounded-full font-bold shadow-md transition-transform flex items-center justify-center shrink-0 ${
               hasPreview
-                ? "hover:brightness-110 text-white active:scale-95 cursor-pointer"
-                : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
+                ? 'hover:brightness-110 text-white active:scale-95 cursor-pointer'
+                : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none'
             }`}
             title={
               !hasPreview
-                ? "No audio preview available"
+                ? 'No audio preview available'
                 : isCurrentPlaying
                 ? `Pause Preview: ${artist.label}`
                 : `Play 30s Audio Preview: ${artist.label}`
@@ -332,7 +198,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         </div>
       </div>
 
-      {/* Desktop Header Image with max-h-72 aspect-square */}
+      {/* Desktop Header Image */}
       <div
         style={{
           width: '100%',
@@ -343,7 +209,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         }}
         className="hidden md:block aspect-square max-h-56 lg:max-h-72 border-b border-white/10"
       >
-        {/* High-visibility Skeleton placeholder while artist picture is loading (no fading) */}
+        {/* Skeleton placeholder while artist picture is loading */}
         {!isImageLoaded && (
           <div
             style={{
@@ -392,7 +258,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           </div>
         )}
 
-        {/* Ambient blurred backdrop (no fading) */}
+        {/* Ambient blurred backdrop */}
         {sidebarImageUrl && isImageLoaded && (
           <img
             key={`${artist.id}-backdrop`}
@@ -408,10 +274,11 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             }}
           />
         )}
-        {/* Main artist photo rendered at 100% width and 100% height */}
+
+        {/* Main artist photo */}
         <img
           key={`${artist.id}-main`}
-          src={sidebarImageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80'}
+          src={sidebarImageUrl || DEFAULT_FALLBACK_AVATAR}
           alt={artist.label}
           referrerPolicy="no-referrer"
           crossOrigin="anonymous"
@@ -423,11 +290,12 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             if (artist.image && target.src !== artist.image) {
               target.src = artist.image;
             } else {
-              target.src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80';
+              target.src = DEFAULT_FALLBACK_AVATAR;
             }
             setLoadedArtistId(artist.id);
           }}
         />
+
         {/* Bottom gradient scrim for text readability */}
         <div
           style={{
@@ -438,7 +306,8 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             height: '62%',
             pointerEvents: 'none',
             zIndex: 6,
-            background: 'linear-gradient(to top, rgba(7, 9, 14, 0.92) 0%, rgba(7, 9, 14, 0.50) 45%, transparent 100%)'
+            background:
+              'linear-gradient(to top, rgba(7, 9, 14, 0.92) 0%, rgba(7, 9, 14, 0.50) 45%, transparent 100%)'
           }}
         />
 
@@ -472,20 +341,16 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
             bottom: '0.75rem',
             right: '1rem',
             zIndex: 10,
-            ...(hasPreview
-              ? {
-                  backgroundColor: accentColor,
-                }
-              : {})
+            ...(hasPreview ? { backgroundColor: accentColor } : {})
           }}
           className={`w-12 h-12 rounded-full font-bold shadow-lg transition-transform flex items-center justify-center shrink-0 ${
             hasPreview
-              ? "hover:brightness-110 text-white active:scale-95 cursor-pointer"
-              : "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none"
+              ? 'hover:brightness-110 text-white active:scale-95 cursor-pointer'
+              : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60 shadow-none'
           }`}
           title={
             !hasPreview
-              ? "No audio preview available"
+              ? 'No audio preview available'
               : isCurrentPlaying
               ? `Pause Preview: ${artist.label}`
               : `Play 30s Audio Preview: ${artist.label}`
@@ -493,15 +358,31 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         >
           <div className="w-5 h-5 flex items-center justify-center shrink-0">
             {isCurrentPlaying ? (
-              <Pause className="w-5 h-5 fill-white text-white shrink-0" fill="white" color="white" />
+              <Pause
+                className="w-5 h-5 fill-white text-white shrink-0"
+                fill="white"
+                color="white"
+              />
             ) : (
-              <Play className="w-5 h-5 fill-white text-white shrink-0 ml-0.5" fill="white" color="white" />
+              <Play
+                className="w-5 h-5 fill-white text-white shrink-0 ml-0.5"
+                fill="white"
+                color="white"
+              />
             )}
           </div>
         </button>
 
         {/* Artist Name, Listeners & Subgenres */}
-        <div style={{ position: 'absolute', bottom: '0.75rem', left: '1rem', right: '4.5rem', zIndex: 10 }}>
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '0.75rem',
+            left: '1rem',
+            right: '4.5rem',
+            zIndex: 10
+          }}
+        >
           <h2 className="text-xl font-bold text-white tracking-tight truncate drop-shadow-md">
             {artist.label}
           </h2>
@@ -518,7 +399,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                       key={idx}
                       style={{
                         backgroundColor: `color-mix(in srgb, ${accentColor} 20%, #131722)`,
-                        borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`,
+                        borderColor: `color-mix(in srgb, ${accentColor} 65%, transparent)`
                       }}
                       className="px-1.5 py-0.5 rounded text-[10px] font-medium border text-white"
                     >
@@ -548,14 +429,19 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
               <Disc3 className="w-3.5 h-3.5" style={{ color: accentColor }} />
-              <span className="tracking-wide uppercase">TOP SHARED PLAYLISTS ({displayedNeighbors.length})</span>
+              <span className="tracking-wide uppercase">
+                TOP SHARED PLAYLISTS ({displayedNeighbors.length})
+              </span>
             </div>
           </div>
 
           <div className="flex flex-col gap-2">
             {displayedNeighbors.length > 0 ? (
               displayedNeighbors.map((c, idx) => {
-                const barPercent = Math.max(12, Math.min(100, Math.floor((c.sharedPlaylists / (maxShared || 1)) * 100)));
+                const barPercent = Math.max(
+                  12,
+                  Math.min(100, Math.floor((c.sharedPlaylists / (maxShared || 1)) * 100))
+                );
                 return (
                   <button
                     key={c.neighborId}
@@ -566,9 +452,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-slate-500 text-[11px]">#{idx + 1}</span>
-                        <span className="font-semibold text-white truncate">
-                          {c.neighborName}
-                        </span>
+                        <span className="font-semibold text-white truncate">{c.neighborName}</span>
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px] font-bold text-white shrink-0">
                         <span>{c.sharedPlaylists}</span>
@@ -590,9 +474,12 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                 );
               })
             ) : !artist.topCrossovers ? (
-              /* High-visibility Skeleton loader for connection list if data is ever resolving */
+              /* High-visibility Skeleton loader for connection list */
               Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 flex flex-col gap-2 animate-pulse">
+                <div
+                  key={i}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 flex flex-col gap-2 animate-pulse"
+                >
                   <div className="flex items-center justify-between">
                     <div className="h-3.5 w-24 bg-white/10 rounded" />
                     <div className="h-3.5 w-6 bg-white/10 rounded" />
@@ -613,7 +500,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         {/* Action Button: Open in Spotify */}
         <div className="mt-auto pt-2">
           <a
-            href={artist.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(artist.label)}`}
+            href={
+              artist.spotifyUrl ||
+              `https://open.spotify.com/search/${encodeURIComponent(artist.label)}`
+            }
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-[#1DB954]/20 hover:bg-[#1DB954]/30 border border-[#1DB954]/40 text-[#1DB954] text-xs font-bold transition-all shadow-sm"

@@ -1,34 +1,29 @@
-const rgbaCache = new Map<string, string>();
-
-function parseHexChannel(s: string, fallback: number): number {
-  const v = parseInt(s, 16);
-  return Number.isNaN(v) ? fallback : v;
-}
-
-export function hexToRgba(hex: string, alpha: number): string {
-  const clampedAlpha = Math.max(0, Math.min(1, alpha));
-  const key = `${hex}_${clampedAlpha.toFixed(2)}`;
-  const cached = rgbaCache.get(key);
-  if (cached) return cached;
-
-  let r = 148, g = 163, b = 184;
-  if (hex && hex.charAt(0) === '#') {
-    let clean = hex.slice(1);
-    if (clean.length === 3) {
-      clean = clean[0] + clean[0] + clean[1] + clean[1] + clean[2] + clean[2];
-    }
-    if (clean.length >= 6) {
-      r = parseHexChannel(clean.substring(0, 2), 148);
-      g = parseHexChannel(clean.substring(2, 4), 163);
-      b = parseHexChannel(clean.substring(4, 6), 184);
-    }
+/**
+ * Converts HSL color values to a hex string.
+ * @param h Hue (0 - 360)
+ * @param sPct Saturation percentage (0 - 100)
+ * @param lPct Lightness percentage (0 - 100)
+ */
+export function hslToHex(h: number, sPct: number, lPct: number): string {
+  const s = sPct / 100;
+  const l = lPct / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (0 <= h && h < 60) {
+    r = c; g = x; b = 0;
+  } else if (60 <= h && h < 120) {
+    r = x; g = c; b = 0;
+  } else if (120 <= h && h < 180) {
+    r = 0; g = c; b = x;
+  } else if (180 <= h && h < 240) {
+    r = 0; g = x; b = c;
+  } else if (240 <= h && h < 300) {
+    r = x; g = 0; b = c;
+  } else if (300 <= h && h <= 360) {
+    r = c; g = 0; b = x;
   }
-
-  // WebGL premultiplied alpha
-  const pr = Math.round(r * clampedAlpha);
-  const pg = Math.round(g * clampedAlpha);
-  const pb = Math.round(b * clampedAlpha);
-  const result = `rgba(${pr}, ${pg}, ${pb}, ${clampedAlpha})`;
-  rgbaCache.set(key, result);
-  return result;
+  const toHex = (val: number) => Math.round((val + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
 }

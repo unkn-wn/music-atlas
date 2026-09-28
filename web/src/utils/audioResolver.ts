@@ -64,9 +64,38 @@ function jsonpRequest(url: string, timeoutMs: number = 6000): Promise<any> {
 }
 
 /**
+ * Extracts a playable preview from a list of Deezer track items and caches it.
+ */
+function extractPreviewFromTracks(
+  items: any[],
+  artistName: string,
+  cacheKey: string
+): DeezerPreviewResult | null {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const chosenTrack = items.find((t) => t?.preview) || items[0];
+
+  if (chosenTrack?.preview) {
+    const result: DeezerPreviewResult = {
+      previewUrl: chosenTrack.preview,
+      trackTitle: chosenTrack.title || artistName
+    };
+    previewCache.set(cacheKey, {
+      ...result,
+      expiresAt: Date.now() + 12 * 60 * 1000
+    });
+    return result;
+  }
+
+  return null;
+}
+
+/**
  * Synchronously checks if a valid cached preview exists.
  */
-export function getCachedPreview(artistId?: string | null, artistName?: string | null): DeezerPreviewResult | null {
+export function getCachedPreview(
+  artistId?: string | null,
+  artistName?: string | null
+): DeezerPreviewResult | null {
   if (!artistId && !artistName) return null;
   const cacheKey = artistId || artistName?.toLowerCase().trim() || '';
   const cached = previewCache.get(cacheKey);
@@ -96,22 +125,8 @@ export async function resolveArtistPreview(
     const dzId = artistId.replace('dz_', '');
     try {
       const resp = await jsonpRequest(`https://api.deezer.com/artist/${dzId}/top?limit=10`);
-      const items = resp?.data;
-      if (Array.isArray(items) && items.length > 0) {
-        const chosenTrack = items.find((t) => t?.preview) || items[0];
-
-        if (chosenTrack?.preview) {
-          const result: DeezerPreviewResult = {
-            previewUrl: chosenTrack.preview,
-            trackTitle: chosenTrack.title || artistName
-          };
-          previewCache.set(cacheKey, {
-            ...result,
-            expiresAt: Date.now() + 12 * 60 * 1000
-          });
-          return result;
-        }
-      }
+      const result = extractPreviewFromTracks(resp?.data, artistName, cacheKey);
+      if (result) return result;
     } catch {
       // Fall through to search query fallback
     }
@@ -119,23 +134,11 @@ export async function resolveArtistPreview(
 
   // 2. Search fallback: Query Deezer catalog by artist name
   try {
-    const resp = await jsonpRequest(`https://api.deezer.com/search?q=${encodeURIComponent(artistName)}&limit=5`);
-    const items = resp?.data;
-    if (Array.isArray(items) && items.length > 0) {
-      const chosenTrack = items.find((t) => t?.preview) || items[0];
-
-      if (chosenTrack?.preview) {
-        const result: DeezerPreviewResult = {
-          previewUrl: chosenTrack.preview,
-          trackTitle: chosenTrack.title || artistName
-        };
-        previewCache.set(cacheKey, {
-          ...result,
-          expiresAt: Date.now() + 12 * 60 * 1000
-        });
-        return result;
-      }
-    }
+    const resp = await jsonpRequest(
+      `https://api.deezer.com/search?q=${encodeURIComponent(artistName)}&limit=5`
+    );
+    const result = extractPreviewFromTracks(resp?.data, artistName, cacheKey);
+    if (result) return result;
   } catch {
     // If search also fails, return null
   }

@@ -1,7 +1,7 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React from 'react';
 import { Play, Pause, Volume2, VolumeX, Loader2, X } from 'lucide-react';
 import { AtlasNode } from '../types/atlas';
-import { resolveArtistPreview, getCachedPreview } from '../utils/audioResolver';
+import { useAudioPlayer, formatAudioTime } from '../hooks/useAudioPlayer';
 
 interface AudioPlayerBarProps {
   currentArtist: AtlasNode | null;
@@ -18,159 +18,20 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   onClose,
   onSelectArtist
 }) => {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const activeArtistIdRef = useRef<string | null>(null);
-  const loadedSrcRef = useRef<string | null>(null);
-
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(30);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [volume, setVolume] = useState(0.2);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
-  const [resolvedTitle, setResolvedTitle] = useState<string | null>(() => {
-    const cached = currentArtist ? getCachedPreview(currentArtist.id, currentArtist.label) : null;
-    return cached?.trackTitle || null;
-  });
-
-  // Synchronously stop and purge old audio when artist changes
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.removeAttribute('src');
-      audioRef.current.load();
-    }
-    loadedSrcRef.current = null;
-    activeArtistIdRef.current = currentArtist?.id || null;
-    setCurrentTime(0);
-    setProgress(0);
-    const cached = currentArtist ? getCachedPreview(currentArtist.id, currentArtist.label) : null;
-    setResolvedTitle(cached?.trackTitle || null);
-    setIsLoadingAudio(false);
-  }, [currentArtist?.id]);
-
-  // Clean up audio on unmount
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-        audioRef.current.removeAttribute('src');
-        audioRef.current.load();
-      }
-    };
-  }, []);
-
-  // Volume & Mute control
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
-    }
-  }, [volume, isMuted]);
-
-  // Playback & On-Demand Preview Resolution
-  useEffect(() => {
-    const audioElement = audioRef.current;
-    if (!audioElement || !currentArtist) return;
-
-    if (!isPlaying) {
-      audioElement.pause();
-      setIsLoadingAudio(false);
-      return;
-    }
-
-    // If audio is already loaded and ready for this exact artist, just play
-    if (loadedSrcRef.current && audioElement.src === loadedSrcRef.current) {
-      audioElement.play().catch((e: any) => {
-        if (e.name !== 'AbortError') {
-          console.warn("Playback resume error:", e);
-          onTogglePlay();
-        }
-      });
-      return;
-    }
-
-    // Resolve preview on demand
-    const targetArtistId = currentArtist.id;
-    activeArtistIdRef.current = targetArtistId;
-    setIsLoadingAudio(true);
-
-    resolveArtistPreview(targetArtistId, currentArtist.label)
-      .then(async (result) => {
-        // Discard if user switched artists while resolving
-        if (activeArtistIdRef.current !== targetArtistId) {
-          return;
-        }
-
-        if (result?.previewUrl && audioRef.current) {
-          loadedSrcRef.current = result.previewUrl;
-          if (result.trackTitle) {
-            setResolvedTitle(result.trackTitle);
-          }
-          audioRef.current.src = result.previewUrl;
-          audioRef.current.volume = isMuted ? 0 : volume;
-          audioRef.current.currentTime = 0;
-          try {
-            await audioRef.current.play();
-          } catch (e: any) {
-            if (e.name !== 'AbortError') {
-              console.warn("Audio play error:", e);
-              onTogglePlay();
-            }
-          }
-        } else {
-          console.warn("No preview available for:", currentArtist.label);
-          onTogglePlay();
-        }
-      })
-      .catch((err) => {
-        if (activeArtistIdRef.current === targetArtistId) {
-          console.warn("Preview resolve error:", err);
-          onTogglePlay();
-        }
-      })
-      .finally(() => {
-        if (activeArtistIdRef.current === targetArtistId) {
-          setIsLoadingAudio(false);
-        }
-      });
-  }, [currentArtist?.id, isPlaying]);
-
-  const handleTimeUpdate = () => {
-    if (audioRef.current && !isLoadingAudio) {
-      const cur = audioRef.current.currentTime;
-      const dur = audioRef.current.duration || 30;
-      setCurrentTime(cur);
-      setDuration(dur);
-      setProgress((cur / dur) * 100);
-    }
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setProgress(val);
-    if (audioRef.current) {
-      audioRef.current.currentTime = (val / 100) * duration;
-    }
-  };
-
-  const toggleMute = () => {
-    if (audioRef.current) {
-      audioRef.current.muted = !isMuted;
-      setIsMuted(!isMuted);
-    }
-  };
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    if (audioRef.current) {
-      audioRef.current.volume = val;
-      if (val === 0) setIsMuted(true);
-      else setIsMuted(false);
-    }
-  };
+  const {
+    audioRef,
+    progress,
+    duration,
+    currentTime,
+    volume,
+    isMuted,
+    isLoadingAudio,
+    resolvedTitle,
+    handleTimeUpdate,
+    handleSeek,
+    toggleMute,
+    handleVolumeChange
+  } = useAudioPlayer(currentArtist, isPlaying, onTogglePlay);
 
   if (!currentArtist) return null;
 
@@ -230,7 +91,10 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             <div className="h-3 w-28 sm:w-36 bg-white/10 rounded animate-pulse" />
           )}
           <div className="text-[10px] sm:text-[11px] text-slate-400 truncate flex items-center gap-1 leading-tight">
-            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: currentArtist.color }} />
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: currentArtist.color }}
+            />
             <span className="truncate group-hover:text-slate-200 transition-colors">
               {currentArtist.label}
             </span>
@@ -240,17 +104,15 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
       {/* Play/Pause Button */}
       <button
-        onClick={() => {
-          onTogglePlay();
-        }}
+        onClick={() => onTogglePlay()}
         disabled={isLoadingAudio}
         className="w-9 h-9 sm:w-10 sm:h-10 rounded-full font-bold shadow-md transition-transform shrink-0 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/30 active:scale-95 cursor-pointer"
         title={
           isLoadingAudio
-            ? "Resolving audio preview..."
+            ? 'Resolving audio preview...'
             : isPlaying
-            ? "Pause Preview"
-            : "Play Preview"
+            ? 'Pause Preview'
+            : 'Play Preview'
         }
       >
         <div className="w-4 h-4 flex items-center justify-center shrink-0">
@@ -267,7 +129,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       {/* Scrubber & Time */}
       <div className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">
         <span className="text-[10px] text-slate-400 w-7 sm:w-8 text-right shrink-0">
-          0:{Math.floor(currentTime).toString().padStart(2, '0')}
+          {formatAudioTime(currentTime)}
         </span>
         <input
           type="range"
@@ -280,16 +142,13 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           className="w-full min-w-0"
         />
         <span className="text-[10px] text-slate-400 w-7 sm:w-8 shrink-0">
-          0:{Math.floor(duration).toString().padStart(2, '0')}
+          {formatAudioTime(duration)}
         </span>
       </div>
 
       {/* Volume Control */}
       <div className="hidden sm:flex items-center gap-2 shrink-0">
-        <button
-          onClick={toggleMute}
-          className="text-slate-400 hover:text-white transition-colors"
-        >
+        <button onClick={toggleMute} className="text-slate-400 hover:text-white transition-colors">
           {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
         <input

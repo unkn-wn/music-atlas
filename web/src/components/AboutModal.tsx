@@ -72,6 +72,15 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
             className="text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
           >
             leon.mofx@gmail.com
+          </a>{' '}
+          or open an issue on{' '}
+          <a
+            href="https://github.com/unkn-wn/music-atlas"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
+          >
+            GitHub
           </a>
           ! Inspired by the Twitch Atlas.
         </p>

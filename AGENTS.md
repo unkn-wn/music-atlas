@@ -29,7 +29,7 @@ The entire universe is built on **one cardinal rule**:
 
 - **NEVER** hardcode artist names into the pipeline or frontend.
 - **NEVER** create artificial override lists, whitelist conditions, or special-case hacks for specific artists or genres.
-- **NEVER** hardcode the genre names or normalize genre categories. Genres should explicitly come from the apple itunes api's primaryGenre, which would be the continent label. Secondary genres will come from everysoundatonce subgenre when an artist is scraped.
+- **NEVER** hardcode the genre names or normalize genre categories. Continent macro-labels emerge dynamically from Louvain modularity clustering consensus over member artists' EveryNoise subgenres, and artist catalog verification/primary genres come directly from Deezer. Secondary genres come from EveryNoise subgenre provenance when playlists are scraped.
 - If an artist is missing, the solution is **always** broader, higher-volume playlist harvesting, never hardcoded injection.
 - Artists survive into the atlas if and only if they satisfy the mathematical survival criterion: appearing across $c_i \ge 4$ independent qualifying user playlists.
 

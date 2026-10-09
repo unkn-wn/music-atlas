@@ -18,6 +18,8 @@ Every node, connection, genre tag, and metric emerges organically from real-worl
 - **30s Audio Streamer**: Persistent bottom audio player streaming 30-second AAC audio previews with scrubbing, volume control, and animated visualizer bars.
 - **Instant Search (`Ctrl+K` or `/`)**: Global fuzzy search across artists, genres, and continents with smooth camera fly-to animations.
 - **Continent Filter HUD**: Filter the entire galaxy by macro continent with interactive artist counts and color swatches.
+- **About & Methodology Modal**: Built-in guide detailing data provenance (EveryNoise, YouTube Music, Deezer), map visual legend (nodes, connections, colors), and issue reporting links to GitHub and email.
+
 
 ---
 
@@ -65,9 +67,9 @@ The entire universe is built on **one cardinal rule**:
 
 ### 3. Stage 2: Verification & Metadata Hydration (`02_enrich_artists.py`)
 - **Mathematical Survival Threshold**: Artists survive into the atlas if and only if they appear across $c_i \ge 4$ independent qualifying playlists.
-- **Metadata Hydration**: Resolves authentic listener reach and high-resolution portrait imagery via Deezer and YouTube Music Official Artist Channels.
+- **Metadata Hydration**: Resolves authentic listener reach and high-resolution portrait imagery via Deezer's catalog API.
 - **IDF-Weighted Subgenres**: Computes Top 3 Subgenres using inverse-document-frequency weighting across playlist provenance.
-- **Audio Previews**: Attaches authentic 30-second AAC audio preview streams via iTunes Search API.
+- **Audio Previews**: Attaches authentic 30-second AAC audio preview streams via Deezer API (with client-side on-demand resolver for fresh CDN playback tokens).
 
 ### 4. Stage 3 & 4: Sparse Co-Occurrence & Normalization (`03_build_cooccurrence.py`, `04_normalize_and_sparsify.py`)
 - Projects the bipartite artist-playlist matrix into a sparse co-occurrence matrix $C = M^T M$.
@@ -102,6 +104,8 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+*(Note: The pre-bundled galaxy dataset is included in `web/public/data/atlas-graph.json.gz` alongside chunked continent details, so no pipeline run is required to explore immediately).*
+
 ### 2. Run the Data Pipeline (Optional)
 
 To harvest more playlists or re-run the layout simulation:
@@ -128,24 +132,25 @@ music-atlas/
 ├── pipeline/                          # Python data generation & layout pipeline
 │   ├── 00_harvest_genres.py           # EveryNoise taxonomy ingestion (6,291 genres)
 │   ├── 01_harvest_playlists.py        # Public community playlist crawler
-│   ├── 02_enrich_artists.py           # Survival threshold (c_i >= 4) & Deezer/iTunes enrichment
+│   ├── 02_enrich_artists.py           # Survival threshold (c_i >= 4) & Deezer enrichment
 │   ├── 03_build_cooccurrence.py       # Sparse CSR bipartite matrix projection
 │   ├── 04_normalize_and_sparsify.py   # Salton's Cosine similarity & degree bounds
 │   ├── 05_community_and_layout.py     # Louvain continents & ForceAtlas2 layout simulation
-│   ├── 06_export_web_artifacts.py     # Exports web/public/data/atlas-graph.json
+│   ├── 06_export_web_artifacts.py     # Exports web/public/data/atlas-graph.json & .gz
 │   ├── run_pipeline.py                # Master CLI runner with checkpointing
 │   ├── sanitizer.py                   # Strict Unicode sanitization & prefix parsing
 │   └── requirements.txt               # Python dependencies
 └── web/                               # WebGL React client
-    ├── public/data/atlas-graph.json   # Exported graph artifact
+    ├── public/data/                   # Graph bundle (atlas-graph.json.gz) & continent details
     ├── src/
     │   ├── components/
+    │   │   ├── AboutModal.tsx         # Data methodology, map legend & issue link
     │   │   ├── AtlasCanvas.tsx        # Cosmograph WebGL2 canvas & avatar overlay
     │   │   ├── ArtistDrawer.tsx       # Responsive mobile bottom sheet / desktop sidebar
     │   │   ├── AudioPlayerBar.tsx     # 30s AAC preview player with scrubber
     │   │   ├── SearchBar.tsx          # Global fuzzy search with camera fly-to
     │   │   └── ControlHUD.tsx         # Macro continent selector popover
-    │   ├── hooks/useGraphData.ts      # Graph data loader & golden-angle color generator
+    │   ├── hooks/useGraphData.ts      # Streaming gzip graph loader & color generator
     │   ├── types/atlas.ts             # TypeScript definitions
     │   └── App.tsx                    # Root application state & loading screen
     ├── package.json

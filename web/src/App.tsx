@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import { Radio, ZoomIn, ZoomOut, Maximize2, Info, Loader2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Info, Loader2 } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
 import { SearchBar } from './components/SearchBar';
@@ -241,9 +241,7 @@ export const App: React.FC = () => {
       >
         {/* Brand Logo & Stats */}
         <div className="glass-panel rounded-full h-10 w-10 sm:w-auto p-0 sm:px-4 flex items-center justify-center sm:justify-start gap-2.5 shadow-xl pointer-events-auto shrink-0 border border-white/10 bg-[#07090e]/85 backdrop-blur-xl">
-          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-emerald-400 to-cyan-400 flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
-            <Radio className="w-3.5 h-3.5 text-black stroke-[2.5]" />
-          </div>
+          <img src="/favicon.svg" alt="" className="w-6 h-6 rounded-md shrink-0" />
           <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
             MUSIC ATLAS
           </span>

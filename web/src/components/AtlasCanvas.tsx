@@ -313,6 +313,9 @@ export const AtlasCanvas = React.memo(
         const isMobileView = typeof window !== 'undefined' && window.innerWidth < 768;
         const clampedPixelRatio = Math.min(window.devicePixelRatio || 1, isMobileView ? 1.5 : 2.0);
 
+        let fitAttempts = 0;
+        let initialFitTimer: any = null;
+
         const cosmograph = new Cosmograph(containerRef.current, {
           points: cosmographPoints,
           links: cosmographLinks,
@@ -371,6 +374,12 @@ export const AtlasCanvas = React.memo(
           selectPointOnLabelClick: false,
           resetSelectionOnEmptyCanvasClick: false,
           backgroundColor: '#07090e',
+          // Point positions reach the GPU only after the first build; camera APIs like zoomToPoint
+          // read them back, so readiness is signalled from here rather than at construction
+          onGraphRebuilt: () => {
+            if (isCancelled || initialFitTimer !== null) return;
+            initialFitTimer = setTimeout(checkFit, 50);
+          },
           onZoom: () => {
             const cosmo = cosmographRef.current as any;
             if (cosmo?._cosmos) {
@@ -429,8 +438,6 @@ export const AtlasCanvas = React.memo(
           cosmographRef.current = cosmograph;
         }
 
-        let fitAttempts = 0;
-        let initialFitTimer: any = null;
         const checkFit = () => {
           if (isCancelled || !cosmographRef.current) return;
           const cosmo = cosmographRef.current as any;
@@ -452,7 +459,6 @@ export const AtlasCanvas = React.memo(
             onReadyRef.current?.();
           }
         };
-        initialFitTimer = setTimeout(checkFit, 50);
 
         scheduleDrawAvatars();
 

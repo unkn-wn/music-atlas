@@ -85,6 +85,13 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           ! Inspired by the Twitch Atlas.
         </p>
 
+        <a
+          href="/artists/"
+          className="block text-center text-xs text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
+        >
+          Browse every artist A–Z
+        </a>
+
         <button
           onClick={onClose}
           className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"

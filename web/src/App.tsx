@@ -11,8 +11,13 @@ import { AtlasNode } from './types/atlas';
 import { hydrateArtistDetails } from './utils/artistUtils';
 
 const STORAGE_KEY_SEEN_ABOUT = 'music_atlas_has_seen_about';
+const ARTIST_PARAM = 'artist';
+
+// Artist requested via deep link (e.g. from the /artists/ index), read once at load
+const INITIAL_ARTIST_ID = new URLSearchParams(window.location.search).get(ARTIST_PARAM);
 
 function getInitialShowAbout(): boolean {
+  if (INITIAL_ARTIST_ID) return false;
   try {
     return localStorage.getItem(STORAGE_KEY_SEEN_ABOUT) !== 'true';
   } catch {
@@ -128,6 +133,22 @@ export const App: React.FC = () => {
     setIsCanvasReady(true);
   }, []);
 
+  // Fly to the deep-linked artist once the canvas can navigate
+  useEffect(() => {
+    if (isCanvasReady && INITIAL_ARTIST_ID && nodeMap.has(INITIAL_ARTIST_ID)) {
+      handleSelectArtist(INITIAL_ARTIST_ID, true);
+    }
+  }, [isCanvasReady, nodeMap, handleSelectArtist]);
+
+  // Mirror the selected artist into the URL so the current view is shareable
+  useEffect(() => {
+    if (!isCanvasReady) return;
+    const url = new URL(window.location.href);
+    if (selectedArtistId) url.searchParams.set(ARTIST_PARAM, selectedArtistId);
+    else url.searchParams.delete(ARTIST_PARAM);
+    window.history.replaceState(null, '', url);
+  }, [isCanvasReady, selectedArtistId]);
+
   const handleTogglePreview = useCallback((artist: AtlasNode) => {
     setActiveAudioArtist((current) => {
       if (current?.id === artist.id) {
@@ -241,7 +262,7 @@ export const App: React.FC = () => {
       >
         {/* Brand Logo & Stats */}
         <div className="glass-panel rounded-full h-10 w-10 sm:w-auto p-0 sm:px-4 flex items-center justify-center sm:justify-start gap-2.5 shadow-xl pointer-events-auto shrink-0 border border-white/10 bg-[#07090e]/85 backdrop-blur-xl">
-          <img src="/favicon.svg" alt="" className="w-6 h-6 rounded-md shrink-0" />
+          <img src="/favicon.svg" alt="" className="w-6 h-6 shrink-0" />
           <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
             MUSIC ATLAS
           </span>

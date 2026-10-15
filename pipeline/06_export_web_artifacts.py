@@ -2,7 +2,7 @@
 Stage 5: Final Web Artifact Export (atlas-graph.json).
 Assembles layout coordinates, dynamic continental naming, normalized edge weights,
 inward radial Bézier curvature, verified subscriber counts, Top 3 Subgenres,
-and adaptive relative-affinity connections (6 to 20 connections) into a unified,
+and drawn connections (each artist's top 6 by playlist overlap; the drawer lists exactly these) into a unified,
 lightweight JSON bundle for the Sigma.js WebGL frontend.
 Outputs:
 - pipeline/output/atlas-graph.json
@@ -37,44 +37,11 @@ LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 EDGES_FILE = os.path.join(OUTPUT_DIR, "sparsified_edges.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 
-def compute_adaptive_neighbors(artist_id: str, neighbors: List[Dict], total_playlists: int) -> List[Dict]:
-    """
-    Computes adaptive connections eliminating superstar clutter:
-    - Guaranteed minimum top 6 connections
-    - Hard ceiling cap at 20 connections
-    - Relative affinity threshold: rel_affinity >= 0.25 (relative to #1 strongest connection)
-    - Anti-fluke filter for mega-artists (c_A >= 30 requires c_AB >= 2)
-    """
-    if not neighbors:
-        return []
+DRAWN_EDGES_PER_ARTIST = 6
 
-    # Sort descending by shared playlists, then cosine similarity
-    sorted_neighbors = sorted(neighbors, key=lambda x: (x["sharedPlaylists"], x["cosineSimilarity"]), reverse=True)
-
-    max_affinity = max(n["cosineSimilarity"] for n in sorted_neighbors) if sorted_neighbors else 1.0
-    surviving = []
-
-    for rank, n in enumerate(sorted_neighbors):
-        # 1. Guaranteed Minimum Top 6
-        if rank < 6:
-            surviving.append(n)
-            continue
-
-        # 2. Hard Ceiling Cap at 20
-        if rank >= 20:
-            break
-
-        # 3. Relative Affinity Threshold
-        rel_affinity = n["cosineSimilarity"] / (max_affinity or 1.0)
-
-        # 4. Anti-Fluke Filter for Mega-Artists (c_A >= 30)
-        is_mega = total_playlists >= 30
-        fluke_check = (not is_mega) or (n["sharedPlaylists"] >= 2)
-
-        if rel_affinity >= 0.25 and fluke_check:
-            surviving.append(n)
-
-    return surviving
+def by_overlap(neighbors: List[Dict]) -> List[Dict]:
+    """Orders connections by playlist overlap, then shared playlist count."""
+    return sorted(neighbors, key=lambda x: (x["overlapPercent"], x["sharedPlaylists"]), reverse=True)
 
 def main():
     if not all(os.path.exists(f) for f in [CATALOG_FILE, COMMUNITIES_FILE, LAYOUT_FILE, EDGES_FILE]):
@@ -116,30 +83,26 @@ def main():
         if src not in catalog_map or dst not in catalog_map:
             continue
 
-        sim = e.get("cosineSimilarity", e.get("weight", 0.5))
-        c_ij = e.get("rawSharedPlaylists", 1)
-        pct_src = e.get("crossoverSourcePercent", 0.0)
-        pct_dst = e.get("crossoverTargetPercent", 0.0)
-
-        dst_meta = catalog_map[dst]
-        src_meta = catalog_map[src]
+        c_ij = int(e.get("rawSharedPlaylists", 1))
+        # % of each artist's playlists that include the other; overlap is their geometric mean
+        pct_src = float(e.get("crossoverSourcePercent", 0.0))
+        pct_dst = float(e.get("crossoverTargetPercent", 0.0))
+        overlap = round(math.sqrt(pct_src * pct_dst), 1)
 
         raw_neighbors[src].append({
             "neighborId": dst,
-            "neighborName": dst_meta.get("name", dst),
-            "image": dst_meta.get("image", ""),
-            "cosineSimilarity": round(float(sim), 4),
-            "sharedPlaylists": int(c_ij),
-            "crossoverPercent": round(float(pct_src), 1)
+            "overlapPercent": overlap,
+            "sharedPlaylists": c_ij,
+            "selfPercent": round(pct_src, 1),
+            "neighborPercent": round(pct_dst, 1)
         })
 
         raw_neighbors[dst].append({
             "neighborId": src,
-            "neighborName": src_meta.get("name", src),
-            "image": src_meta.get("image", ""),
-            "cosineSimilarity": round(float(sim), 4),
-            "sharedPlaylists": int(c_ij),
-            "crossoverPercent": round(float(pct_dst), 1)
+            "overlapPercent": overlap,
+            "sharedPlaylists": c_ij,
+            "selfPercent": round(pct_dst, 1),
+            "neighborPercent": round(pct_src, 1)
         })
 
     # 2. Compute subscriber scaling range for empirical node sizing using Log10-Power scaling
@@ -158,7 +121,16 @@ def main():
     # 3. Assemble Nodes and Decoupled Detail Dictionary
     nodes = []
     details = {}
+
+    # Drawn edges: each artist's top 6 by playlist overlap (capped to eliminate panning lag),
+    # plus bridge edges connecting satellite clusters
     active_edge_pairs = set()
+    for a_id in catalog_map:
+        for n in by_overlap(raw_neighbors[a_id])[:DRAWN_EDGES_PER_ARTIST]:
+            active_edge_pairs.add(tuple(sorted([a_id, n["neighborId"]])))
+    for e in edges:
+        if e.get("isBridge"):
+            active_edge_pairs.add(tuple(sorted([e["source"], e["target"]])))
 
     for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes & Details", unit="node"):
         pos = coords.get(a_id, {"x": 0.0, "y": 0.0})
@@ -175,23 +147,14 @@ def main():
         ratio = max(0.0, min(1.0, ratio))
         node_size = round(1.1 + (ratio ** 2.6) * 13.4, 1)
 
-        # Apply Adaptive Connection Rule for topCrossovers (dynamic 6 to 20)
+        # Drawer lists exactly this artist's drawn connections (variable length), as [id, overlap%, shared, self%, neighbor%]
         c_i = meta.get("totalPlaylists") or meta.get("sharedPlaylistsCount") or len(raw_neighbors[a_id])
-        adaptive_connections = compute_adaptive_neighbors(a_id, raw_neighbors[a_id], c_i)
-
-        # In the visual WebGL graph, cap each artist to at most 6 edges to eliminate panning lag
-        for n in adaptive_connections[:6]:
-            active_edge_pairs.add(tuple(sorted([a_id, n["neighborId"]])))
-
-        # Compact crossovers: retain full adaptive connections (up to 20) for the UI drawer as 4-tuples [id, sim, shared, pct]
+        drawn_connections = by_overlap([
+            n for n in raw_neighbors[a_id] if tuple(sorted([a_id, n["neighborId"]])) in active_edge_pairs
+        ])
         compact_connections = [
-            [
-                n["neighborId"],
-                round(float(n["cosineSimilarity"]), 4),
-                int(n["sharedPlaylists"]),
-                round(float(n["crossoverPercent"]), 1)
-            ]
-            for n in adaptive_connections
+            [n["neighborId"], n["overlapPercent"], n["sharedPlaylists"], n["selfPercent"], n["neighborPercent"]]
+            for n in drawn_connections
         ]
 
         nodes.append({
@@ -215,11 +178,6 @@ def main():
             "totalPlaylists": c_i,
             "topCrossovers": compact_connections
         }
-
-    # Always preserve all bridge edges connecting satellite clusters
-    for e in edges:
-        if e.get("isBridge"):
-            active_edge_pairs.add(tuple(sorted([e["source"], e["target"]])))
 
     # 4. Assemble High-Performance Straight Edges (Strictly Active Pairs + Bridges)
     formatted_edges = []

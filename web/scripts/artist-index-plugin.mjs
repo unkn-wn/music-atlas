@@ -1,16 +1,14 @@
-// Post-build: emits a crawlable A–Z artist index (dist/artists/) and dist/sitemap.xml
-// from the exported atlas graph. Every entry deep-links into the atlas via /?artist=<id>.
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+// Vite plugin: a crawlable A–Z artist index (/artists/), /sitemap.xml and the artist count in index.html,
+// all from the exported atlas graph. Served by the dev server and written to dist/ on build.
+// Every entry deep-links into the atlas via /?artist=<id>.
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SITE = 'https://music-atlas.app';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = join(WEB, 'dist');
-const OUT = join(DIST, 'artists');
-
-const graph = JSON.parse(gunzipSync(readFileSync(join(WEB, 'public/data/atlas-graph.json.gz'))).toString('utf8'));
+const GRAPH_FILE = join(WEB, 'public/data/atlas-graph.json.gz');
 
 const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
 const slugOf = (letter) => (letter === '#' ? 'other' : letter.toLowerCase());
@@ -23,14 +21,7 @@ const letterOf = (name) => {
   return ch >= 'A' && ch <= 'Z' ? ch : '#';
 };
 
-const buckets = new Map(LETTERS.map((l) => [l, []]));
-for (const node of graph.nodes) buckets.get(letterOf(node.label)).push(node);
-const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
-for (const list of buckets.values()) list.sort((a, b) => collator.compare(a.label, b.label));
-
-const total = graph.nodes.length;
-
-const letterNav = (active) =>
+const letterNav = (buckets, active) =>
   `<nav class="letters" aria-label="Artists by letter">${LETTERS.map((l) => {
     const count = buckets.get(l).length;
     if (!count) return '';
@@ -98,57 +89,100 @@ h1{font-size:clamp(28px,5vw,44px);font-weight:800;letter-spacing:-.02em;margin:0
 .artists span{display:block;font-size:12px;color:#64748b}
 `;
 
-rmSync(OUT, { recursive: true, force: true });
-mkdirSync(OUT, { recursive: true });
-writeFileSync(join(OUT, 'style.css'), CSS);
+// Every generated file as URL path -> { type, body }
+const buildSite = (graph) => {
+  const buckets = new Map(LETTERS.map((l) => [l, []]));
+  for (const node of graph.nodes) buckets.get(letterOf(node.label)).push(node);
+  const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
+  for (const list of buckets.values()) list.sort((a, b) => collator.compare(a.label, b.label));
 
-const sitemapPaths = ['/', '/artists/'];
+  const total = graph.nodes.length;
+  const files = new Map();
+  const html = (path, body) => files.set(path, { type: 'text/html; charset=utf-8', body });
+  files.set('/artists/style.css', { type: 'text/css; charset=utf-8', body: CSS });
 
-writeFileSync(
-  join(OUT, 'index.html'),
-  page({
-    path: '/artists/',
-    title: `All ${fmt(total)} Artists A–Z | Music Atlas`,
-    description: `Browse all ${fmt(total)} artists on Music Atlas, mapped by genre and real community playlists. Pick any artist to jump to them on the map.`,
-    body: `<h1>Every artist on the map</h1>
+  const sitemapPaths = ['/', '/artists/'];
+
+  html(
+    '/artists/',
+    page({
+      path: '/artists/',
+      title: `All ${fmt(total)} Artists A–Z | Music Atlas`,
+      description: `Browse all ${fmt(total)} artists on Music Atlas, mapped by genre and real community playlists. Pick any artist to jump to them on the map.`,
+      body: `<h1>Every artist on the map</h1>
 <p class="lede">${fmt(total)} artists who appear across at least four real, user-made playlists. Pick a letter, then select any artist to fly to them in the atlas.</p>
 <ul class="grid">${LETTERS.filter((l) => buckets.get(l).length)
-      .map((l) => `<li><a href="/artists/${slugOf(l)}/"><strong>${l}</strong><span>${fmt(buckets.get(l).length)} artists${l === '#' ? ' · 0–9 &amp; other scripts' : ''}</span></a></li>`)
-      .join('')}</ul>`,
-  }),
-);
-
-for (const letter of LETTERS) {
-  const artists = buckets.get(letter);
-  if (!artists.length) continue;
-  const slug = slugOf(letter);
-  const path = `/artists/${slug}/`;
-  const heading = letter === '#' ? 'Artists: 0–9 & other scripts' : `Artists starting with ${letter}`;
-  mkdirSync(join(OUT, slug), { recursive: true });
-  writeFileSync(
-    join(OUT, slug, 'index.html'),
-    page({
-      path,
-      title: `${heading} | Music Atlas`,
-      description: `Browse ${fmt(artists.length)} artists ${letter === '#' ? 'whose names start with a number or non-Latin script' : `starting with ${letter}`} on Music Atlas. Select any artist to see their genre neighborhood on the map.`,
-      body: `<h1>${esc(heading)}</h1>
-<p class="lede">${fmt(artists.length)} artists. Select one to see where they sit on the map and who they share playlists with.</p>
-${letterNav(letter)}
-<ul class="artists">${artists
-        .map((a) => `<li><a href="/?artist=${encodeURIComponent(a.id)}">${esc(a.label)}</a>${a.primaryGenre ? `<span>${esc(a.primaryGenre)}</span>` : ''}</li>`)
+        .map((l) => `<li><a href="/artists/${slugOf(l)}/"><strong>${l}</strong><span>${fmt(buckets.get(l).length)} artists${l === '#' ? ' · 0–9 &amp; other scripts' : ''}</span></a></li>`)
         .join('')}</ul>`,
     }),
   );
-  sitemapPaths.push(path);
-}
 
-writeFileSync(
-  join(DIST, 'sitemap.xml'),
-  `<?xml version="1.0" encoding="UTF-8"?>
+  for (const letter of LETTERS) {
+    const artists = buckets.get(letter);
+    if (!artists.length) continue;
+    const path = `/artists/${slugOf(letter)}/`;
+    const heading = letter === '#' ? 'Artists: 0–9 & other scripts' : `Artists starting with ${letter}`;
+    html(
+      path,
+      page({
+        path,
+        title: `${heading} | Music Atlas`,
+        description: `Browse ${fmt(artists.length)} artists ${letter === '#' ? 'whose names start with a number or non-Latin script' : `starting with ${letter}`} on Music Atlas. Select any artist to see their genre neighborhood on the map.`,
+        body: `<h1>${esc(heading)}</h1>
+<p class="lede">${fmt(artists.length)} artists. Select one to see where they sit on the map and who they share playlists with.</p>
+${letterNav(buckets, letter)}
+<ul class="artists">${artists
+          .map((a) => `<li><a href="/?artist=${encodeURIComponent(a.id)}">${esc(a.label)}</a>${a.primaryGenre ? `<span>${esc(a.primaryGenre)}</span>` : ''}</li>`)
+          .join('')}</ul>`,
+      }),
+    );
+    sitemapPaths.push(path);
+  }
+
+  files.set('/sitemap.xml', {
+    type: 'application/xml; charset=utf-8',
+    body: `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${sitemapPaths.map((p) => `  <url><loc>${SITE}${p}</loc></url>`).join('\n')}
 </urlset>
 `,
-);
+  });
 
-console.log(`artist index: ${fmt(total)} artists across ${sitemapPaths.length - 2} letter pages`);
+  return { total, files };
+};
+
+// Rounded down to the thousand for page titles and descriptions ("74,000 artists")
+const roundedCount = (total) => fmt(Math.floor(total / 1000) * 1000);
+
+export const artistIndexPlugin = () => {
+  let site;
+  const load = () => (site ??= buildSite(JSON.parse(gunzipSync(readFileSync(GRAPH_FILE)).toString('utf8'))));
+  let outDir;
+  return {
+    name: 'artist-index',
+    configResolved(config) {
+      outDir = join(config.root, config.build.outDir);
+    },
+    transformIndexHtml(htmlText) {
+      return htmlText.replaceAll('%ARTIST_COUNT%', roundedCount(load().total));
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? '').split('?')[0];
+        const file = load().files.get(path) ?? load().files.get(`${path}/`);
+        if (!file) return next();
+        res.setHeader('Content-Type', file.type);
+        res.end(file.body);
+      });
+    },
+    closeBundle() {
+      const { total, files } = load();
+      for (const [path, { body }] of files) {
+        const target = join(outDir, path.endsWith('/') ? `${path}index.html` : path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, body);
+      }
+      console.log(`artist index: ${fmt(total)} artists across ${files.size - 3} letter pages`);
+    },
+  };
+};

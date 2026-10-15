@@ -4,7 +4,7 @@ Implements:
 1. Salton's Cosine Similarity: s_ij = c_ij / sqrt(c_i * c_j)
 2. Minimum weight cutoff (s_ij >= 0.08) & Superstar fluke filter (c_ij >= 2 if c_i >= 30)
 3. Evidence-Scaled Dynamic Degree Bounds: d_max(i) = min(28, max(4, floor(sqrt(c_i) * 4.5)))
-4. Mutual Nearest Neighbor (MNN) edge protection
+4. Rank protection (each artist keeps its top-4 neighbours) + global strongest-first fill
 5. Single Giant Component (GCC) Guarantee with Multi-Point Interstellar Bridges (k >= 3)
    and semantic subgenre fallback to prevent isolated satellite dispersion
 6. Outputs: pipeline/output/sparsified_edges.json and pipeline/output/surviving_artist_ids.json
@@ -130,60 +130,37 @@ def main():
     for i in range(num_artists):
         candidates[i].sort(key=lambda x: x[1], reverse=True)
 
-    # 2. Dynamic Evidence-Scaled Degree Bounds & Mutual Nearest Neighbor (MNN) Edge Protection
+    # 2. Dynamic Evidence-Scaled Degree Bounds, Rank Protection & Global Fill
     degree_bounds = {}
     for i in range(num_artists):
         c_i = marginals_raw[i]
         d_bound = min(24, max(4, int(math.floor(math.sqrt(max(1, c_i)) * 4.0))))
         degree_bounds[i] = d_bound
 
-    # Build top-k sets for MNN protection (k = 6)
-    k_mnn = 6
-    top_k_sets = {i: {c[0] for c in candidates[i][:k_mnn]} for i in range(num_artists)}
-
     final_edges = set()
     edge_data_map = {}
     node_degree = defaultdict(int)
 
-    # A. Add MNN protected edges
-    for i in range(num_artists):
-        for j, sim, c_ij in candidates[i][:k_mnn]:
-            if i < j and i in top_k_sets[j]:
-                pair = (i, j)
-                final_edges.add(pair)
-                edge_data_map[pair] = (sim, c_ij)
-                node_degree[i] += 1
-                node_degree[j] += 1
+    def add_edge(i: int, j: int, sim: float, c_ij: int):
+        pair = (min(i, j), max(i, j))
+        if pair in final_edges:
+            return
+        final_edges.add(pair)
+        edge_data_map[pair] = (sim, c_ij)
+        node_degree[i] += 1
+        node_degree[j] += 1
 
-    # B. Add top affinity edges up to degree bounds
+    # A. Rank protection: every artist keeps its own top-k strongest neighbours,
+    # regardless of how full the neighbour's degree budget already is
+    k_protected = 4
     for i in range(num_artists):
-        d_max_i = degree_bounds[i]
-        for j, sim, c_ij in candidates[i]:
-            if node_degree[i] >= d_max_i:
-                break
-            d_max_j = degree_bounds[j]
-            if node_degree[j] >= d_max_j:
-                continue
+        for j, sim, c_ij in candidates[i][:k_protected]:
+            add_edge(i, j, sim, c_ij)
 
-            pair = (min(i, j), max(i, j))
-            if pair not in final_edges:
-                final_edges.add(pair)
-                edge_data_map[pair] = (sim, c_ij)
-                node_degree[i] += 1
-                node_degree[j] += 1
-
-    # C. Minimum connectivity relaxation (ensure at least 4 edges if candidates exist)
-    for i in range(num_artists):
-        if node_degree[i] < 4 and candidates[i]:
-            for j, sim, c_ij in candidates[i]:
-                if node_degree[i] >= 4:
-                    break
-                pair = (min(i, j), max(i, j))
-                if pair not in final_edges and node_degree[j] < 32:
-                    final_edges.add(pair)
-                    edge_data_map[pair] = (sim, c_ij)
-                    node_degree[i] += 1
-                    node_degree[j] += 1
+    # B. Order-independent fill: strongest edges first, globally, while both endpoints are under their degree bound
+    for (i, j), (sim, c_ij) in sorted(all_scored_edges.items(), key=lambda kv: kv[1][0], reverse=True):
+        if node_degree[i] < degree_bounds[i] and node_degree[j] < degree_bounds[j]:
+            add_edge(i, j, sim, c_ij)
 
     print(f"Edges before component bridging: {len(final_edges)}")
 

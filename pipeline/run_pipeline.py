@@ -38,7 +38,7 @@ def main():
     parser = argparse.ArgumentParser(description="Master Execution Pipeline for Music Atlas.")
     parser.add_argument("--tier", type=int, choices=[1, 2, 3, 4], default=2, help="Scale tier (1=500, 2=1500, 3=3000, 4=6291)")
     parser.add_argument("--target-playlists", type=int, default=20, help="Target qualifying community playlists per genre in Stage 1 (default: 20)")
-    parser.add_argument("--max-anchors", type=int, default=8, help="Max anchor artists for Tier 2 recommendation discovery in Stage 1 (default: 8)")
+    parser.add_argument("--max-anchors", type=int, default=8, help="Max verified anchor songs per genre for recommended-playlist discovery in Stage 1 (default: 8)")
     parser.add_argument("--min-playlists", type=int, default=4, help="Minimum playlist threshold c_i for candidate survival in Stage 2 (default: 4)")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; use disk cache & local snapshots")
     parser.add_argument("--skip-harvest", action="store_true", help="Skip Stages 0 and 1; start from Stage 2")
@@ -50,6 +50,7 @@ def main():
     parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter in Stage 5 (default: auto)")
     parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width in Stage 5 (default: 6400.0)")
     parser.add_argument("--reverse", action="store_true", help="Process genres in reverse rank order (niche/underground genres first)")
+    parser.add_argument("--revisit", action="store_true", help="Stage 1: re-run genres still below --target-playlists instead of skipping checkpointed ones")
     args = parser.parse_args()
 
     OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
@@ -97,6 +98,8 @@ def main():
                 cmd.append("--fresh")
             if args.reverse:
                 cmd.append("--reverse")
+            if args.revisit:
+                cmd.append("--revisit")
         elif step_idx == 2:
             cmd.extend(["--min-playlists", str(args.min_playlists)])
             if args.offline:

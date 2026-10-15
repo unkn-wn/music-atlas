@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && node scripts/build-artist-index.mjs",
+    "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

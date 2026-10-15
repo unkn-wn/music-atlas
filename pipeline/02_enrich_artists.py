@@ -425,7 +425,7 @@ def main():
     parser.add_argument("--offline", action="store_true", help="Run offline using cached metadata only")
     args = parser.parse_args()
 
-    if not os.path.exists(PLAYLISTS_FILE) or not os.path.exists(OCCURRENCES_FILE):
+    if not os.path.exists(PLAYLISTS_FILE):
         raise FileNotFoundError("Missing inputs for Stage 2. Please run 01_harvest_playlists.py first.")
 
     print("=" * 70)
@@ -590,11 +590,9 @@ def main():
         primary_scraped = scraped_list[0] if scraped_list else canonical_name.lower()
 
         # Top 3 Rank-Aware Specificity Subgenres computed from merged occurrences across all variants
+        # Artists seen only in unlabelled playlists have no subgenre evidence; stage 05 assigns their continent's genre
         top_subgenres = compute_rank_aware_top_subgenres(canonical_genre_occurrences[aid], genre_ranks, total_pl)
-        if not top_subgenres:
-            top_subgenres = [format_genre_name(primary_scraped)] if primary_scraped else ["Other"]
-
-        primary_genre = top_subgenres[0] if top_subgenres else "Other"
+        primary_genre = top_subgenres[0] if top_subgenres else ""
 
         catalog_entry = {
             "id": aid,

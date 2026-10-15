@@ -164,9 +164,10 @@ export function parseContinentDetails(
             if (Array.isArray(c)) {
               return {
                 neighborId: c[0],
-                cosineSimilarity: c[1],
+                overlapPercent: c[1],
                 sharedPlaylists: c[2],
-                crossoverPercent: c[3]
+                selfPercent: c[3],
+                neighborPercent: c[4]
               };
             }
             return c;

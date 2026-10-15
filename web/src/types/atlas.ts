@@ -2,9 +2,13 @@ export interface CrossoverNeighbor {
   neighborId: string;
   neighborName?: string;
   image?: string;
-  cosineSimilarity: number;
+  /** Geometric mean of selfPercent and neighborPercent (0-100) */
+  overlapPercent: number;
   sharedPlaylists: number;
-  crossoverPercent: number;
+  /** % of this artist's playlists that include the neighbor */
+  selfPercent: number;
+  /** % of the neighbor's playlists that include this artist */
+  neighborPercent: number;
 }
 
 export interface ArtistDetail {

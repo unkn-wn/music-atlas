@@ -62,8 +62,9 @@ The entire universe is built on **one cardinal rule**:
   - **Anti-discography guard**: Discards playlists where any single artist accounts for $> 50\%$ of tracks.
   - **Boundary limits**: Strictly enforces $10 \le \text{tracks} \le 150$.
   - **Global curator cap**: Limits maximum 2 playlists from any single curator ID to prevent user bias.
-- **Tier 2 Recommendation Expansion**: Discovers deeper community playlists via Song Related shelves of consensus catalog releases.
-- **Atomic Checkpointing**: Saves progress incrementally every 5 genres, allowing long-running crawls to pause and resume seamlessly.
+- **Verified Recommendation Expansion**: After every genre is searched, explores the "Recommended playlists" shelves of verified anchor songs with an equal budget per genre. An anchor artist must appear in at least 2 playlists whose human-written title names the genre (or 2 of its search playlists when no such titles exist), and that genre must be one of its strongest homes. Every valid playlist found is kept as co-occurrence evidence; its genre label is assigned from its artists, so off-genre playlists are relabeled rather than contaminating the seed genre.
+- **Copied-Playlist Guard**: Rejects playlists whose tracklist is a near-copy (>= 90% of the smaller tracklist shared) of one already harvested, so re-saved copies cannot masquerade as independent curation.
+- **Atomic Checkpointing**: Saves compact progress every 10 minutes, allowing long-running crawls to pause and resume seamlessly.
 
 ### 3. Stage 2: Verification & Metadata Hydration (`02_enrich_artists.py`)
 - **Mathematical Survival Threshold**: Artists survive into the atlas if and only if they appear across $c_i \ge 4$ independent qualifying playlists.
@@ -119,6 +120,9 @@ python pipeline/run_pipeline.py --tier 4 --target-playlists 20
 
 # Or re-generate graph layout from existing checkpoints (Stage 2 through 6)
 python pipeline/run_pipeline.py --from-step 2
+
+# Or keep harvesting from the checkpoint: genres still below the target are searched and expanded again
+python pipeline/run_pipeline.py --from-step 1 --target-playlists 40 --max-anchors 12 --revisit
 ```
 
 ---

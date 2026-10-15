@@ -51,15 +51,10 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
   const isCurrentPlaying = isPlayingPreview && currentlyPlayingId === artist.id;
 
-  // Display adaptive connections without arbitrary truncation
-  const displayedNeighbors = useMemo(() => {
-    if (!artist.topCrossovers) return [];
-    return [...artist.topCrossovers].sort(
-      (a, b) => b.sharedPlaylists - a.sharedPlaylists || b.cosineSimilarity - a.cosineSimilarity
-    );
-  }, [artist.topCrossovers]);
+  // Exactly the artist's drawn connections, pre-sorted by playlist overlap in the pipeline
+  const displayedNeighbors = artist.topCrossovers ?? [];
 
-  const maxShared = displayedNeighbors.length > 0 ? displayedNeighbors[0].sharedPlaylists : 1;
+  const maxOverlap = displayedNeighbors.length > 0 ? displayedNeighbors[0].overlapPercent : 1;
   const subscriberDisplay = formatSubscriberCount(artist.subscribers, artist.subscribersFormatted);
   const subgenres = useMemo(() => filterValidSubgenres(artist.topSubgenres), [artist.topSubgenres]);
   const hasPreview = Boolean(artist.id || artist.label);
@@ -424,13 +419,16 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
         }}
         className="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-3 sm:gap-4"
       >
-        {/* Top Shared Playlists */}
+        {/* Closest Artists by Playlist Overlap */}
         <div>
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
               <Disc3 className="w-3.5 h-3.5" style={{ color: accentColor }} />
-              <span className="tracking-wide uppercase">
-                TOP SHARED PLAYLISTS ({displayedNeighbors.length})
+              <span
+                className="tracking-wide uppercase"
+                title="Ranked by playlist overlap: how much the two artists' playlists overlap, counted from both sides"
+              >
+                CLOSEST ARTISTS ({displayedNeighbors.length})
               </span>
             </div>
           </div>
@@ -440,13 +438,14 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
               displayedNeighbors.map((c, idx) => {
                 const barPercent = Math.max(
                   12,
-                  Math.min(100, Math.floor((c.sharedPlaylists / (maxShared || 1)) * 100))
+                  Math.min(100, Math.floor((c.overlapPercent / (maxOverlap || 1)) * 100))
                 );
                 return (
                   <button
                     key={c.neighborId}
                     type="button"
                     onClick={() => onSelectNeighbor(c.neighborId)}
+                    title={`${c.sharedPlaylists} shared playlists: ${c.selfPercent}% of ${artist.label}'s playlists include ${c.neighborName}, ${c.neighborPercent}% of ${c.neighborName}'s include ${artist.label}`}
                     className="w-full group bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl p-2.5 cursor-pointer text-left transition-colors flex flex-col gap-1.5"
                   >
                     <div className="flex items-center justify-between text-xs">
@@ -455,20 +454,23 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                         <span className="font-semibold text-white truncate">{c.neighborName}</span>
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px] font-bold text-white shrink-0">
-                        <span>{c.sharedPlaylists}</span>
+                        <span>{c.overlapPercent}% overlap</span>
                         <ArrowRight className="w-3 h-3" />
                       </div>
                     </div>
 
-                    {/* Relative Shared Curation Progress Bar */}
-                    <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${barPercent}%`,
-                          background: `linear-gradient(to right, ${accentColor}, color-mix(in srgb, ${accentColor}, white ${PROGRESS_BAR_WHITE_PCT}%))`
-                        }}
-                      />
+                    {/* Overlap Bar (relative to the closest artist) beside the shared playlist count */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-white/10 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${barPercent}%`,
+                            background: `linear-gradient(to right, ${accentColor}, color-mix(in srgb, ${accentColor}, white ${PROGRESS_BAR_WHITE_PCT}%))`
+                          }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{c.sharedPlaylists} shared</span>
                     </div>
                   </button>
                 );

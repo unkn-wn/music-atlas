@@ -6,12 +6,12 @@
     </linearGradient>
   </defs>
   <g fill="none" stroke="#94a3b8" stroke-width="2.6" stroke-linecap="round">
-    <path d="M26 46V14l24-5v32M26 22l24-5"/>
+    <path d="M24 47.5V15.5l24-5v32M24 23.5l24-5"/>
   </g>
-  <ellipse cx="19.5" cy="47" rx="7.5" ry="5.6" transform="rotate(-22 19.5 47)" fill="url(#core)"/>
-  <ellipse cx="43.5" cy="42" rx="7.5" ry="5.6" transform="rotate(-22 43.5 42)" fill="url(#core)"/>
-  <circle cx="26" cy="14" r="3.4" fill="#a855f7"/>
-  <circle cx="50" cy="9" r="3.4" fill="#22d3ee"/>
-  <circle cx="26" cy="22" r="2.7" fill="#f472b6"/>
-  <circle cx="50" cy="17" r="2.7" fill="#facc15"/>
+  <ellipse cx="17.5" cy="48.5" rx="7.5" ry="5.6" transform="rotate(-22 17.5 48.5)" fill="url(#core)"/>
+  <ellipse cx="41.5" cy="43.5" rx="7.5" ry="5.6" transform="rotate(-22 41.5 43.5)" fill="url(#core)"/>
+  <circle cx="24" cy="15.5" r="3.4" fill="#a855f7"/>
+  <circle cx="48" cy="10.5" r="3.4" fill="#22d3ee"/>
+  <circle cx="24" cy="23.5" r="2.7" fill="#f472b6"/>
+  <circle cx="48" cy="18.5" r="2.7" fill="#facc15"/>
 </svg>

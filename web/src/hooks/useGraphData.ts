@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { AtlasGraphBundle, AtlasNode, AtlasEdge, ArtistDetail } from '../types/atlas';
 import { hslToHex } from '../utils/color';
 import { sanitizeAvatarUrl } from '../utils/imageUtils';
+import { filterValidSubgenres } from '../utils/artistUtils';
+import { GraphAdjacency, buildAdjacency } from '../utils/graphPath';
+import { slugify } from '../utils/genreUtils';
+import { IndexedNode, IndexedGenre, buildSearchIndex, buildGenreSearchIndex } from '../utils/searchEngine';
 
 export interface ProcessedGraphData {
   bundle: AtlasGraphBundle;
@@ -10,8 +14,15 @@ export interface ProcessedGraphData {
   continentIndicesMap: Map<number, number[]>;
   sortedGlobalIndices: number[];
   sortedContinentIndices: Map<number, number[]>;
-  neighborMap: Map<string, string[]>;
+  adjacency: GraphAdjacency;
+  /** Genre name -> member node indices, most subscribers first */
+  genreMembers: Map<string, number[]>;
+  genreBySlug: Map<string, string>;
+  searchIndex: IndexedNode[];
+  genreSearchIndex: IndexedGenre[];
 }
+
+const EMPTY_ADJACENCY = buildAdjacency(0, []);
 
 // Configurable seed to reroll continent colors deterministically
 const CONTINENT_COLOR_SEED = 46;
@@ -101,28 +112,17 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
 
   // 4. Filter valid edges to prevent orphaned link rendering crashes in WebGL
   const validEdges: AtlasEdge[] = [];
-  const neighborMap = new Map<string, string[]>();
 
   bundle.edges.forEach((edge) => {
     if (nodeMap.has(edge.source) && nodeMap.has(edge.target)) {
-      const sourceIndex = nodeIndexMap.get(edge.source) ?? 0;
-      const targetIndex = nodeIndexMap.get(edge.target) ?? 0;
-      edge.sourceIndex = sourceIndex;
-      edge.targetIndex = targetIndex;
+      edge.sourceIndex = nodeIndexMap.get(edge.source);
+      edge.targetIndex = nodeIndexMap.get(edge.target);
       validEdges.push(edge);
-
-      // Populate adjacency list
-      const sNbrs = neighborMap.get(edge.source) || [];
-      sNbrs.push(edge.target);
-      neighborMap.set(edge.source, sNbrs);
-
-      const tNbrs = neighborMap.get(edge.target) || [];
-      tNbrs.push(edge.source);
-      neighborMap.set(edge.target, tNbrs);
     }
   });
 
   bundle.edges = validEdges;
+  const adjacency = buildAdjacency(bundle.nodes.length, validEdges);
 
   // 5. Pre-sort node indices descending by subscribers for O(1) top-artist filtering
   const sortedGlobalIndices = Array.from({ length: bundle.nodes.length }, (_, i) => i).sort(
@@ -137,6 +137,21 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
     sortedContinentIndices.set(cId, sorted);
   });
 
+  // 6. Genre membership from EveryNoise subgenres, inheriting the subscriber ordering
+  const genreMembers = new Map<string, number[]>();
+  for (const idx of sortedGlobalIndices) {
+    for (const genre of filterValidSubgenres(bundle.nodes[idx].topSubgenres)) {
+      const members = genreMembers.get(genre);
+      if (members) members.push(idx);
+      else genreMembers.set(genre, [idx]);
+    }
+  }
+  const genreBySlug = new Map<string, string>();
+  for (const genre of [...genreMembers.keys()].sort()) {
+    const slug = slugify(genre);
+    if (slug && !genreBySlug.has(slug)) genreBySlug.set(slug, genre);
+  }
+
   return {
     bundle,
     nodeMap,
@@ -144,7 +159,11 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
     continentIndicesMap,
     sortedGlobalIndices,
     sortedContinentIndices,
-    neighborMap
+    adjacency,
+    genreMembers,
+    genreBySlug,
+    searchIndex: buildSearchIndex(bundle.nodes),
+    genreSearchIndex: buildGenreSearchIndex(genreMembers)
   };
 }
 
@@ -186,7 +205,11 @@ export function useGraphData() {
   const [continentIndicesMap, setContinentIndicesMap] = useState<Map<number, number[]>>(new Map());
   const [sortedGlobalIndices, setSortedGlobalIndices] = useState<number[]>([]);
   const [sortedContinentIndices, setSortedContinentIndices] = useState<Map<number, number[]>>(new Map());
-  const [neighborMap, setNeighborMap] = useState<Map<string, string[]>>(new Map());
+  const [adjacency, setAdjacency] = useState<GraphAdjacency>(EMPTY_ADJACENCY);
+  const [genreMembers, setGenreMembers] = useState<Map<string, number[]>>(new Map());
+  const [genreBySlug, setGenreBySlug] = useState<Map<string, string>>(new Map());
+  const [searchIndex, setSearchIndex] = useState<IndexedNode[]>([]);
+  const [genreSearchIndex, setGenreSearchIndex] = useState<IndexedGenre[]>([]);
   const [detailsMap, setDetailsMap] = useState<Record<string, ArtistDetail>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -253,7 +276,11 @@ export function useGraphData() {
           setContinentIndicesMap(processed.continentIndicesMap);
           setSortedGlobalIndices(processed.sortedGlobalIndices);
           setSortedContinentIndices(processed.sortedContinentIndices);
-          setNeighborMap(processed.neighborMap);
+          setAdjacency(processed.adjacency);
+          setGenreMembers(processed.genreMembers);
+          setGenreBySlug(processed.genreBySlug);
+          setSearchIndex(processed.searchIndex);
+          setGenreSearchIndex(processed.genreSearchIndex);
           setLoading(false);
         }
       } catch (err: any) {
@@ -278,7 +305,11 @@ export function useGraphData() {
     continentIndicesMap,
     sortedGlobalIndices,
     sortedContinentIndices,
-    neighborMap,
+    adjacency,
+    genreMembers,
+    genreBySlug,
+    searchIndex,
+    genreSearchIndex,
     detailsMap,
     loading,
     error,

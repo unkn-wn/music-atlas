@@ -18,12 +18,14 @@ Every node, connection, genre tag, and metric emerges organically from real-worl
 - **30s Audio Streamer**: Persistent bottom audio player streaming 30-second AAC audio previews with scrubbing, volume control, and animated visualizer bars.
 - **Instant Search (`Ctrl+K` or `/`)**: Global fuzzy search across artists, genres, and continents with smooth camera fly-to animations.
 - **Continent Filter HUD**: Filter the entire galaxy by macro continent with interactive artist counts and color swatches.
+- **Degrees of Separation ("Trace path")**: From an artist's drawer (or the route button in the header), pick a second artist to see the shortest chain of shared-playlist connections between them (ties broken by the strongest links), lit up on the map with a shareable `?from=&to=` link.
+- **Genre Panels**: Open any genre from search or an artist's subgenre tags to see its artists by popularity, the continents they live in, related genres (by shared artists), and, where Wikidata has an exact match, when it emerged plus a free-licensed Wikimedia Commons sample. Shareable via `?genre=<slug>`, with crawlable `/genres/` pages.
 - **About & Methodology Modal**: Built-in guide detailing data provenance (EveryNoise, YouTube Music, Deezer), map visual legend (nodes, connections, colors), and issue reporting links to GitHub and email.
 
 
 ---
 
-## How Data Is Gathered (The 7-Stage Pipeline)
+## How Data Is Gathered (The 8-Stage Pipeline)
 
 The entire universe is built on **one cardinal rule**:
 *Strictly zero hardcoding, zero artist favoritism, zero artificial override lists, and zero auto-generated Spotify embed playlists ("The Sound of [genre]").*
@@ -38,6 +40,7 @@ The entire universe is built on **one cardinal rule**:
 │ 4. Cosine Similarity Normalization & Adaptive Sparsification │
 │ 5. Louvain Community Detection & ForceAtlas2 Physics Layout  │
 │ 6. Export Compact Web Artifact (atlas-graph.json)            │
+│ 7. Wikidata & Commons Genre Enrichment (genre-info.json)     │
 └──────────────────────────────┬───────────────────────────────┘
                                │
                                ▼
@@ -81,6 +84,11 @@ The entire universe is built on **one cardinal rule**:
 - Partitions the graph into macro continents using Louvain modularity.
 - Runs a multi-phase ForceAtlas2 physics simulation with Barnes-Hut quadtree optimization, strong gravity, radial knee compression, and disk clearance to prevent node overlap.
 - Exports the bundled graph directly to `web/public/data/atlas-graph.json`.
+
+### 6. Stage 7: Genre Enrichment (`07_enrich_genres.py`)
+- Matches each atlas subgenre to a Wikidata music-genre item by **exact** English label (case-insensitive). Genres with no match or several matches get nothing; there is no hand mapping.
+- Attaches the item's description, inception date, English Wikipedia article and its Commons audio sample (MP3 transcode, license and author), skipping files Commons categorises as AI-generated.
+- Writes `web/public/data/genre-info.json`, loaded lazily by the genre panel. `--offline` keeps the existing file.
 
 ---
 
@@ -141,6 +149,7 @@ music-atlas/
 │   ├── 04_normalize_and_sparsify.py   # Salton's Cosine similarity & degree bounds
 │   ├── 05_community_and_layout.py     # Louvain continents & ForceAtlas2 layout simulation
 │   ├── 06_export_web_artifacts.py     # Exports web/public/data/atlas-graph.json & .gz
+│   ├── 07_enrich_genres.py            # Wikidata/Commons genre facts & samples (genre-info.json)
 │   ├── run_pipeline.py                # Master CLI runner with checkpointing
 │   ├── sanitizer.py                   # Strict Unicode sanitization & prefix parsing
 │   └── requirements.txt               # Python dependencies
@@ -152,8 +161,10 @@ music-atlas/
     │   │   ├── AtlasCanvas.tsx        # Cosmograph WebGL2 canvas & avatar overlay
     │   │   ├── ArtistDrawer.tsx       # Responsive mobile bottom sheet / desktop sidebar
     │   │   ├── AudioPlayerBar.tsx     # 30s AAC preview player with scrubber
-    │   │   ├── SearchBar.tsx          # Global fuzzy search with camera fly-to
-    │   │   └── ControlHUD.tsx         # Macro continent selector popover
+    │   │   ├── SearchBar.tsx          # Global artist & genre search with camera fly-to
+    │   │   ├── GenrePanel.tsx         # Genre artists, continents, related genres, Wikidata facts
+    │   │   ├── PathCard.tsx           # Degrees-of-separation result chain
+    │   │   └── ControlHUD.tsx         # Continents, filters & Connect popover
     │   ├── hooks/useGraphData.ts      # Streaming gzip graph loader & color generator
     │   ├── types/atlas.ts             # TypeScript definitions
     │   └── App.tsx                    # Root application state & loading screen
@@ -162,3 +173,15 @@ music-atlas/
 ```
 
 
+
+---
+
+## License
+
+- **Code** (`pipeline/`, `web/`): [MIT](LICENSE).
+- **Derived graph data** (`web/public/data/`: artist co-occurrence edges and weights, continents, layout coordinates, subgenre assignments): [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Credit "Music Atlas (music-atlas.app)".
+- **Third-party content, not covered by either license:**
+  - Artist images, audio preview URLs and fan counts come from the [Deezer API](https://developers.deezer.com/) and are governed by Deezer's terms.
+  - Genre names come from [EveryNoise at Once](https://everynoise.com/).
+  - Genre descriptions and inception dates come from [Wikidata](https://www.wikidata.org/) (CC0).
+  - Genre audio samples are files on [Wikimedia Commons](https://commons.wikimedia.org/), each under its own license, shown next to the sample in the app.

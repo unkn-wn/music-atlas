@@ -1,6 +1,7 @@
 {
   "name": "music-atlas",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "cd web && npm install && npm run build"
   }

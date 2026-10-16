@@ -1,14 +1,19 @@
-// Vite plugin: a crawlable A–Z artist index (/artists/), /sitemap.xml and the artist count in index.html,
-// all from the exported atlas graph. Served by the dev server and written to dist/ on build.
-// Every entry deep-links into the atlas via /?artist=<id>.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+// Vite plugin: a crawlable A–Z artist index (/artists/), a page per genre (/genres/), /sitemap.xml and the
+// artist count in index.html, all from the exported atlas graph (plus pipeline stage 7's genre-info.json).
+// Served by the dev server and written to dist/ on build.
+// Entries deep-link into the atlas via /?artist=<id> and /?genre=<slug>.
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// Bundled by Vite's config loader, so the app's TypeScript helpers are shared rather than re-implemented
+import { slugify, findRelatedGenres, formatInception } from '../src/utils/genreUtils';
+import { filterValidSubgenres, formatSubscriberCount } from '../src/utils/artistUtils';
 
 const SITE = 'https://music-atlas.app';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GRAPH_FILE = join(WEB, 'public/data/atlas-graph.json.gz');
+const GENRE_INFO_FILE = join(WEB, 'public/data/genre-info.json');
 
 const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
 const slugOf = (letter) => (letter === '#' ? 'other' : letter.toLowerCase());
@@ -55,6 +60,7 @@ const page = ({ path, title, description, body }) => `<!doctype html>
 <body>
 <header>
 <a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28" />Music Atlas</a>
+<nav class="links"><a href="/artists/">Artists</a><a href="/genres/">Genres</a></nav>
 <a class="cta" href="/">Open the map →</a>
 </header>
 <main>
@@ -68,6 +74,9 @@ const CSS = `*{box-sizing:border-box}
 body{margin:0;background:#090b10;color:#e2e8f0;font-family:'Plus Jakarta Sans',system-ui,sans-serif;line-height:1.5}
 a{color:inherit}
 header{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px max(16px,calc((100% - 1100px)/2));background:rgba(9,11,16,.9);backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,.08)}
+.links{display:flex;gap:18px;margin-right:auto;font-size:14px;font-weight:600}
+.links a{text-decoration:none;color:#94a3b8}
+.links a:hover{color:#34d399}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.04em;text-decoration:none;text-transform:uppercase;font-size:14px}
 .cta{font-weight:800;font-size:13px;color:#090b10;background:linear-gradient(90deg,#34d399,#22d3ee);padding:8px 16px;border-radius:999px;text-decoration:none;white-space:nowrap}
 main{max-width:1100px;margin:0 auto;padding:40px 16px 80px}
@@ -87,10 +96,72 @@ h1{font-size:clamp(28px,5vw,44px);font-weight:800;letter-spacing:-.02em;margin:0
 .artists a{font-weight:600;text-decoration:none;color:#f1f5f9}
 .artists a:hover{color:#34d399}
 .artists span{display:block;font-size:12px;color:#64748b}
+.lede a,.source a{color:#34d399}
+.cta.inline{display:inline-block;margin:0 0 28px}
+h2{font-size:18px;color:#fff;margin:32px 0 12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0;margin:0}
+.chips a{display:block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);text-decoration:none;font-size:14px}
+.chips a:hover{border-color:#34d399;color:#34d399}
+.sample{max-width:480px;margin:0 0 8px}
+.sample audio{width:100%}
+.source{font-size:12px;color:#64748b;margin:0 0 8px}
 `;
 
+// Genre name -> member nodes (most subscribers first), from the same EveryNoise subgenres the app indexes
+const groupGenres = (nodes) => {
+  const genres = new Map();
+  const byPopularity = [...nodes].sort((a, b) => (b.subscribers || 0) - (a.subscribers || 0));
+  for (const node of byPopularity) {
+    for (const genre of filterValidSubgenres(node.topSubgenres)) {
+      if (!genres.has(genre)) genres.set(genre, []);
+      genres.get(genre).push(node);
+    }
+  }
+  return genres;
+};
+
+// A missing or duplicated slug would silently drop a genre page, so it fails the build instead
+const genreSlugs = (genres) => {
+  const slugs = new Map();
+  const owners = new Map();
+  for (const genre of genres.keys()) {
+    const slug = slugify(genre);
+    if (!slug) throw new Error(`Genre "${genre}" has no URL slug`);
+    if (owners.has(slug)) throw new Error(`Genres "${owners.get(slug)}" and "${genre}" share the slug "${slug}"`);
+    owners.set(slug, genre);
+    slugs.set(genre, slug);
+  }
+  return slugs;
+};
+
+const genrePageBody = (genre, members, slugs, related, info) => {
+  const era = info?.since ? ` Emerged ${esc(formatInception(info.since))}.` : '';
+  const about = info?.desc
+    ? `<p class="lede">${esc(info.desc.charAt(0).toUpperCase() + info.desc.slice(1))}.${era}${info.wiki ? ` <a href="${esc(info.wiki)}">Wikipedia</a>` : ''}</p><p class="source">Description from Wikidata (CC0).</p>`
+    : era ? `<p class="lede">${era.trim()}</p>` : '';
+  const sample = info?.audio
+    ? `<h2>Listen: ${esc(info.audio.title)}</h2>
+<div class="sample"><audio controls preload="none" src="${esc(info.audio.src)}"></audio></div>
+<p class="source">${info.audio.author ? `${esc(info.audio.author)} · ` : ''}<a href="${esc(info.audio.page)}">${esc(info.audio.license || 'Wikimedia Commons')}</a></p>`
+    : '';
+  const relatedList = related.length
+    ? `<h2>Related genres</h2>
+<ul class="chips">${related.map((r) => `<li><a href="/genres/${slugs.get(r.name)}/">${esc(r.name)}</a></li>`).join('')}</ul>`
+    : '';
+  return `<h1>${esc(genre)}</h1>
+<p class="lede">${fmt(members.length)} artists on Music Atlas tagged ${esc(genre)}, ranked by listeners. Select one to see who they share playlists with.</p>
+${about}
+<a class="cta inline" href="/?genre=${slugs.get(genre)}">Open ${esc(genre)} on the map →</a>
+${sample}
+${relatedList}
+<h2>Artists</h2>
+<ul class="artists">${members
+    .map((a) => `<li><a href="/?artist=${encodeURIComponent(a.id)}">${esc(a.label)}</a><span>${formatSubscriberCount(a.subscribers)} listeners</span></li>`)
+    .join('')}</ul>`;
+};
+
 // Every generated file as URL path -> { type, body }
-const buildSite = (graph) => {
+const buildSite = (graph, genreInfo) => {
   const buckets = new Map(LETTERS.map((l) => [l, []]));
   for (const node of graph.nodes) buckets.get(letterOf(node.label)).push(node);
   const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
@@ -139,6 +210,47 @@ ${letterNav(buckets, letter)}
     sitemapPaths.push(path);
   }
 
+  const genres = groupGenres(graph.nodes);
+  const slugs = genreSlugs(genres);
+  const genreNames = [...genres.keys()].sort((a, b) => collator.compare(a, b));
+
+  html(
+    '/genres/',
+    page({
+      path: '/genres/',
+      title: `All ${fmt(genres.size)} Genres | Music Atlas`,
+      description: `Browse ${fmt(genres.size)} music genres on Music Atlas, each with its artists, related genres and where it sits on the map of real community playlists.`,
+      body: `<h1>Every genre on the map</h1>
+<p class="lede">${fmt(genres.size)} genres from EveryNoise, each holding the artists whose playlists tag them with it. Pick one to see its artists and related genres.</p>
+<ul class="artists">${genreNames
+        .map((g) => `<li><a href="/genres/${slugs.get(g)}/">${esc(g)}</a><span>${fmt(genres.get(g).length)} artists</span></li>`)
+        .join('')}</ul>`,
+    }),
+  );
+  sitemapPaths.push('/genres/');
+
+  for (const genre of genreNames) {
+    const members = genres.get(genre);
+    const path = `/genres/${slugs.get(genre)}/`;
+    const related = findRelatedGenres(
+      genre,
+      members,
+      (node) => filterValidSubgenres(node.topSubgenres),
+      (name) => genres.get(name)?.length ?? 1,
+    );
+    const top = members.slice(0, 3).map((a) => a.label).join(', ');
+    html(
+      path,
+      page({
+        path,
+        title: `${genre} Artists & Related Genres | Music Atlas`,
+        description: `${fmt(members.length)} ${genre} artists, including ${top}, mapped by real community playlists. See related genres and explore ${genre} on the map.`,
+        body: genrePageBody(genre, members, slugs, related, Object.prototype.hasOwnProperty.call(genreInfo, genre) ? genreInfo[genre] : undefined),
+      }),
+    );
+    sitemapPaths.push(path);
+  }
+
   files.set('/sitemap.xml', {
     type: 'application/xml; charset=utf-8',
     body: `<?xml version="1.0" encoding="UTF-8"?>
@@ -148,7 +260,7 @@ ${sitemapPaths.map((p) => `  <url><loc>${SITE}${p}</loc></url>`).join('\n')}
 `,
   });
 
-  return { total, files };
+  return { total, genreCount: genres.size, files };
 };
 
 // Rounded down to the thousand for page titles and descriptions ("74,000 artists")
@@ -156,7 +268,11 @@ const roundedCount = (total) => fmt(Math.floor(total / 1000) * 1000);
 
 export const artistIndexPlugin = () => {
   let site;
-  const load = () => (site ??= buildSite(JSON.parse(gunzipSync(readFileSync(GRAPH_FILE)).toString('utf8'))));
+  const load = () =>
+    (site ??= buildSite(
+      JSON.parse(gunzipSync(readFileSync(GRAPH_FILE)).toString('utf8')),
+      existsSync(GENRE_INFO_FILE) ? JSON.parse(readFileSync(GENRE_INFO_FILE, 'utf8')) : {},
+    ));
   let outDir;
   return {
     name: 'artist-index',
@@ -176,13 +292,13 @@ export const artistIndexPlugin = () => {
       });
     },
     closeBundle() {
-      const { total, files } = load();
+      const { total, genreCount, files } = load();
       for (const [path, { body }] of files) {
         const target = join(outDir, path.endsWith('/') ? `${path}index.html` : path);
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, body);
       }
-      console.log(`artist index: ${fmt(total)} artists across ${files.size - 3} letter pages`);
+      console.log(`artist index: ${fmt(total)} artists and ${fmt(genreCount)} genre pages (${fmt(files.size)} files)`);
     },
   };
 };

@@ -1,5 +1,6 @@
 import { AtlasNode } from '../../types/atlas';
 import { getAvatarImage } from '../../utils/avatarCache';
+import { GraphAdjacency } from '../../utils/graphPath';
 import { getArtistNodeDiameter, getZoomScale } from './canvasUtils';
 
 export interface CanvasOverlayParams {
@@ -7,8 +8,10 @@ export interface CanvasOverlayParams {
   cosmo: any;
   nodes: AtlasNode[];
   nodeIndexMap: Map<string, number>;
-  neighborMap: Map<string, string[]>;
+  adjacency: GraphAdjacency;
   selectedNodeId: string | null;
+  /** Artists whose avatar and label always show (the active path), unless an artist off it is selected */
+  pinnedIds: Set<string> | null;
   hoveredPointIndex: number | null;
   isNodeQualifying: (id: string, index?: number) => boolean;
   scheduleDrawAvatars: () => void;
@@ -29,8 +32,9 @@ export function renderCanvasOverlay({
   cosmo,
   nodes,
   nodeIndexMap,
-  neighborMap,
+  adjacency,
   selectedNodeId,
+  pinnedIds,
   hoveredPointIndex,
   isNodeQualifying,
   scheduleDrawAvatars
@@ -69,13 +73,15 @@ export function renderCanvasOverlay({
   const visibleNodeIds = new Set<string>();
   const cssLabels = cosmo._labels?._cssLabelsRenderer?._cssLabels;
 
-  if (selectedNodeId) {
+  const showPinned = pinnedIds !== null && (!selectedNodeId || pinnedIds.has(selectedNodeId));
+
+  if (selectedNodeId && !showPinned) {
     // 1. When an artist is selected: STRICTLY AND ONLY the focal artist and their direct qualifying neighbors!
     visibleNodeIds.add(selectedNodeId);
-    const neighbors = neighborMap.get(selectedNodeId);
-    if (neighbors) {
-      for (const nId of neighbors) {
-        visibleNodeIds.add(nId);
+    const selectedIndex = nodeIndexMap.get(selectedNodeId);
+    if (selectedIndex !== undefined) {
+      for (let k = adjacency.offsets[selectedIndex]; k < adjacency.offsets[selectedIndex + 1]; k++) {
+        visibleNodeIds.add(nodes[adjacency.targets[k]].id);
       }
     }
   } else {
@@ -100,6 +106,9 @@ export function renderCanvasOverlay({
           visibleNodeIds.add(id);
         }
       }
+    }
+    if (showPinned) {
+      for (const id of pinnedIds) visibleNodeIds.add(id);
     }
   }
 
@@ -202,7 +211,7 @@ export function renderCanvasOverlay({
     }
 
     // Collect labels to draw in Pass 2 strictly on top above hover rings
-    if (isHovered || id === selectedNodeId) {
+    if (isHovered || id === selectedNodeId || (showPinned && pinnedIds.has(id))) {
       const hasCssLabel = cssLabels?.get(id)?.getVisibility() === true;
       const labelText = node.label || '';
       if (labelText && !hasCssLabel) {

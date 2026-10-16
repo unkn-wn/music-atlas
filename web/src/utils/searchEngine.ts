@@ -168,3 +168,40 @@ export function searchArtists(
 
   return results;
 }
+
+export interface IndexedGenre {
+  name: string;
+  norm: string;
+  words: string[];
+  artistCount: number;
+}
+
+/** Pre-indexes genre names, largest genres first so every priority bucket is size-ranked. */
+export function buildGenreSearchIndex(genreMembers: Map<string, number[]>): IndexedGenre[] {
+  const list: IndexedGenre[] = [];
+  genreMembers.forEach((members, name) => {
+    const norm = normalizeSearchText(name);
+    list.push({ name, norm, words: norm.split(/[\s\-_/&]+/).filter(Boolean), artistCount: members.length });
+  });
+  return list.sort((a, b) => b.artistCount - a.artistCount);
+}
+
+/** Tiered genre-name matching: exact -> startsWith -> wordStartsWith -> contains. */
+export function searchGenres(
+  indexedGenres: IndexedGenre[],
+  query: string,
+  limit: number = 4
+): IndexedGenre[] {
+  const qNorm = normalizeSearchText(query);
+  if (qNorm.length < 2) return [];
+
+  const buckets: IndexedGenre[][] = [[], [], [], []];
+  for (const genre of indexedGenres) {
+    if (!genre.norm.includes(qNorm)) continue;
+    if (genre.norm === qNorm) buckets[0].push(genre);
+    else if (genre.norm.startsWith(qNorm)) buckets[1].push(genre);
+    else if (genre.words.some((w) => w.startsWith(qNorm))) buckets[2].push(genre);
+    else buckets[3].push(genre);
+  }
+  return buckets.flat().slice(0, limit);
+}

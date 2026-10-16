@@ -1,7 +1,15 @@
 import { AtlasNode, AtlasEdge } from '../../types/atlas';
 
+/** Fixed set of artists and links to illuminate: a degrees-of-separation path or a genre's members */
+export interface Spotlight {
+  kind: 'path' | 'genre';
+  pointIndices: number[];
+  linkIndices: number[];
+}
+
 export interface SelectionStateParams {
   targetNodeId: string | null;
+  spotlight: Spotlight | null;
   targetContinentId: number | null;
   targetDensityRange: [number, number] | null;
   targetConnectionPercentile: number;
@@ -19,6 +27,20 @@ export interface SelectionApplyResult {
   activeFilterSet: Set<number> | null;
 }
 
+/** Mirrors the highlighted sets into Cosmograph's crossfilter so its labels and picking follow them. */
+function setCrossfilterHighlight(cosmo: any, points: number[], links: number[]): void {
+  const crossfilter = cosmo._crossfilter;
+  if (!crossfilter) return;
+  crossfilter._userSelectedPointIndices = new Set(points);
+  crossfilter._userSelectedLinkIndices = new Set(links);
+  crossfilter._highlightedPointIndices = new Set(points);
+  crossfilter._highlightedLinkIndices = new Set(links);
+  crossfilter._pointsHighlightActive = true;
+  crossfilter._linksHighlightActive = true;
+  crossfilter._pointsUserActive = true;
+  crossfilter._linksUserActive = true;
+}
+
 /**
  * Atomic selection state applier: eliminates the white flash by computing incident links
  * synchronously and updating link opacities in the EXACT SAME GPU call as highlighted link indices.
@@ -34,6 +56,7 @@ export function applyCosmographSelection(
 
   const {
     targetNodeId,
+    spotlight,
     targetContinentId,
     targetDensityRange,
     targetConnectionPercentile,
@@ -64,9 +87,16 @@ export function applyCosmographSelection(
 
   let activeFilterSet: Set<number> | null = null;
 
-  if (targetNodeId) {
+  // An artist picked on the active path keeps the whole path lit instead of switching to its neighbourhood
+  const selectedIndex = targetNodeId ? nodeIndexMap.get(targetNodeId) : undefined;
+  const pathKeepsFocus =
+    spotlight?.kind === 'path' &&
+    selectedIndex !== undefined &&
+    spotlight.pointIndices.includes(selectedIndex);
+
+  if (selectedIndex !== undefined && !pathKeepsFocus) {
     activeFilterSet = null;
-    const pointIndex = nodeIndexMap.get(targetNodeId);
+    const pointIndex = selectedIndex;
     if (pointIndex !== undefined) {
       // 1. Synchronously get all incident links
       const incidentLinks = cosmo._computeIncidentLinks([pointIndex]) ?? [];
@@ -86,17 +116,22 @@ export function applyCosmographSelection(
         pointGreyoutOpacity: 0.15
       });
 
-      if (cosmo._crossfilter) {
-        cosmo._crossfilter._userSelectedPointIndices = new Set(highlightedPoints);
-        cosmo._crossfilter._userSelectedLinkIndices = new Set(incidentLinks);
-        cosmo._crossfilter._highlightedPointIndices = new Set(highlightedPoints);
-        cosmo._crossfilter._highlightedLinkIndices = new Set(incidentLinks);
-        cosmo._crossfilter._pointsHighlightActive = true;
-        cosmo._crossfilter._linksHighlightActive = true;
-        cosmo._crossfilter._pointsUserActive = true;
-        cosmo._crossfilter._linksUserActive = true;
-      }
+      setCrossfilterHighlight(cosmo, highlightedPoints, incidentLinks);
     }
+  } else if (spotlight) {
+    // Spotlit artists are the only interactive ones, like a continent filter
+    activeFilterSet = new Set(spotlight.pointIndices);
+    const isPath = spotlight.kind === 'path';
+    cosmos.setConfigPartial({
+      highlightedPointIndices: spotlight.pointIndices,
+      highlightedLinkIndices: spotlight.linkIndices,
+      linkOpacity: isPath ? 0.95 : 0.35,
+      linkGreyoutOpacity: 0.0,
+      linkVisibilityMinTransparency: 1.0,
+      linkDefaultWidth: isPath ? 2.4 : linkDefaultWidth,
+      pointGreyoutOpacity: isPath ? 0.12 : 0.06
+    });
+    setCrossfilterHighlight(cosmo, spotlight.pointIndices, spotlight.linkIndices);
   } else if (targetDensityRange !== null) {
     // Popularity percentage slice filter active (either global or within selected continent)
     const list =
@@ -149,16 +184,7 @@ export function applyCosmographSelection(
       pointGreyoutOpacity: 0.0
     });
 
-    if (cosmo._crossfilter) {
-      cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._pointsHighlightActive = true;
-      cosmo._crossfilter._linksHighlightActive = true;
-      cosmo._crossfilter._pointsUserActive = true;
-      cosmo._crossfilter._linksUserActive = true;
-    }
+    setCrossfilterHighlight(cosmo, qualifyingPoints, qualifyingLinks);
   } else if (targetContinentId !== null) {
     const continentIndices = continentIndicesMap.get(targetContinentId) || [];
     const continentLinks = continentLinksMap.get(targetContinentId) || [];
@@ -193,16 +219,7 @@ export function applyCosmographSelection(
       linkDefaultWidth: linkDefaultWidth,
       pointGreyoutOpacity: targetConnectionPercentile > 0 ? 0.0 : 0.04
     });
-    if (cosmo._crossfilter) {
-      cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._pointsHighlightActive = true;
-      cosmo._crossfilter._linksHighlightActive = true;
-      cosmo._crossfilter._pointsUserActive = true;
-      cosmo._crossfilter._linksUserActive = true;
-    }
+    setCrossfilterHighlight(cosmo, qualifyingPoints, qualifyingLinks);
   } else if (targetConnectionPercentile > 0) {
     // Global view with connection strength filter: ONLY show artists with the strongest connections
     const qualifyingLinks: number[] = [];
@@ -238,21 +255,12 @@ export function applyCosmographSelection(
       pointGreyoutOpacity: 0.0
     });
 
-    if (cosmo._crossfilter) {
-      cosmo._crossfilter._userSelectedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._userSelectedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._highlightedPointIndices = new Set(qualifyingPoints);
-      cosmo._crossfilter._highlightedLinkIndices = new Set(qualifyingLinks);
-      cosmo._crossfilter._pointsHighlightActive = true;
-      cosmo._crossfilter._linksHighlightActive = true;
-      cosmo._crossfilter._pointsUserActive = true;
-      cosmo._crossfilter._linksUserActive = true;
-      if (cosmo._crossfilter._pointsSelection?.clauses) {
-        cosmo._crossfilter._pointsSelection.clauses.length = 0;
-      }
-      if (cosmo._crossfilter._linksSelection?.clauses) {
-        cosmo._crossfilter._linksSelection.clauses.length = 0;
-      }
+    setCrossfilterHighlight(cosmo, qualifyingPoints, qualifyingLinks);
+    if (cosmo._crossfilter?._pointsSelection?.clauses) {
+      cosmo._crossfilter._pointsSelection.clauses.length = 0;
+    }
+    if (cosmo._crossfilter?._linksSelection?.clauses) {
+      cosmo._crossfilter._linksSelection.clauses.length = 0;
     }
   } else {
     activeFilterSet = null;
@@ -307,7 +315,7 @@ export function applyCosmographSelection(
   }
 
   scheduleDrawAvatars();
-  if (targetNodeId || targetDensityRange !== null || targetContinentId !== null) {
+  if (targetNodeId || spotlight || targetDensityRange !== null || targetContinentId !== null) {
     setTimeout(scheduleDrawAvatars, 80);
     setTimeout(scheduleDrawAvatars, 250);
   }

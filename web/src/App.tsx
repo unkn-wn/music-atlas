@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import { ZoomIn, ZoomOut, Maximize2, Info, Loader2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Info, Loader2, Route } from 'lucide-react';
 import { useGraphData } from './hooks/useGraphData';
 import { AtlasCanvas, AtlasCanvasHandle } from './components/AtlasCanvas';
 import { SearchBar } from './components/SearchBar';
@@ -7,17 +7,34 @@ import { ControlHUD } from './components/ControlHUD';
 import { ArtistDrawer } from './components/ArtistDrawer';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { AboutModal } from './components/AboutModal';
+import { GenrePanel } from './components/GenrePanel';
+import { PathCard } from './components/PathCard';
+import { Spotlight } from './components/canvas/canvasSelection';
 import { AtlasNode } from './types/atlas';
 import { hydrateArtistDetails } from './utils/artistUtils';
+import { findPath, GraphPath } from './utils/graphPath';
+import { slugify } from './utils/genreUtils';
 
 const STORAGE_KEY_SEEN_ABOUT = 'music_atlas_has_seen_about';
 const ARTIST_PARAM = 'artist';
+const GENRE_PARAM = 'genre';
+const FROM_PARAM = 'from';
+const TO_PARAM = 'to';
 
-// Artist requested via deep link (e.g. from the /artists/ index), read once at load
-const INITIAL_ARTIST_ID = new URLSearchParams(window.location.search).get(ARTIST_PARAM);
+// View requested via deep link (e.g. from the /artists/ and /genres/ indexes or a shared path), read once at load
+const INITIAL_PARAMS = new URLSearchParams(window.location.search);
+const HAS_DEEP_LINK = [ARTIST_PARAM, GENRE_PARAM, FROM_PARAM].some((key) => INITIAL_PARAMS.has(key));
+
+/** The open path panel: either end may still be unpicked */
+interface ActivePath {
+  fromId: string | null;
+  toId: string | null;
+  /** null until both ends are picked, or when the artists aren't connected */
+  result: GraphPath | null;
+}
 
 function getInitialShowAbout(): boolean {
-  if (INITIAL_ARTIST_ID) return false;
+  if (HAS_DEEP_LINK) return false;
   try {
     return localStorage.getItem(STORAGE_KEY_SEEN_ABOUT) !== 'true';
   } catch {
@@ -33,7 +50,11 @@ export const App: React.FC = () => {
     continentIndicesMap,
     sortedGlobalIndices,
     sortedContinentIndices,
-    neighborMap,
+    adjacency,
+    genreMembers,
+    genreBySlug,
+    searchIndex,
+    genreSearchIndex,
     detailsMap,
     loading,
     error,
@@ -44,6 +65,8 @@ export const App: React.FC = () => {
 
   // UI States
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<ActivePath | null>(null);
   const [selectedContinentId, setSelectedContinentId] = useState<number | null>(null);
   const [densityRange, setDensityRange] = useState<[number, number] | null>(null);
   const [connectionPercentile, setConnectionPercentile] = useState<number>(0);
@@ -104,50 +127,156 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Genre and path spotlights replace the filters (and vice versa), so the map never shows a mix of both
+  const clearFilters = useCallback(() => {
+    setSelectedContinentId(null);
+    setDensityRange(null);
+    setConnectionPercentile(0);
+  }, []);
+
+  const clearSpotlights = useCallback(() => {
+    setSelectedGenre(null);
+    setActivePath(null);
+  }, []);
+
   // Continent selection (clears artist selection and resets rank slice to maintain sync and avoid out-of-bounds)
   const handleSelectContinent = useCallback((continentId: number | null) => {
     setSelectedContinentId(continentId);
     setDensityRange(null);
     if (continentId !== null) {
+      clearSpotlights();
       setSelectedArtistId(null);
       setMobileDragOffset(0);
       setIsMobileDragging(false);
     }
-  }, []);
+  }, [clearSpotlights]);
 
   // Popularity rank range filter selection
   const handleSelectDensityRange = useCallback((range: [number, number] | null) => {
     setDensityRange(range);
     if (range !== null) {
+      clearSpotlights();
       setSelectedArtistId(null);
       setMobileDragOffset(0);
       setIsMobileDragging(false);
     }
-  }, []);
+  }, [clearSpotlights]);
 
   const handleSelectConnectionPercentile = useCallback((val: number) => {
     setConnectionPercentile(val);
+    if (val > 0) clearSpotlights();
+  }, [clearSpotlights]);
+
+  // Opening a genre shows its panel (closing any artist drawer) and frames its artists
+  const handleSelectGenre = useCallback(
+    (genre: string) => {
+      const members = genreMembers.get(genre);
+      if (!members) return;
+      clearFilters();
+      setActivePath(null);
+      setSelectedGenre(genre);
+      setSelectedArtistId(null);
+      setMobileDragOffset(0);
+      setIsMobileDragging(false);
+      canvasRef.current?.fitToIndices(members);
+    },
+    [genreMembers, clearFilters]
+  );
+
+  // Opens or edits the path panel; once both ends are known the path replaces any genre or filter on the map
+  const handleSetPathEnds = useCallback(
+    (fromId: string | null, toId: string | null) => {
+      const from = fromId ? nodeIndexMap.get(fromId) : undefined;
+      const to = toId ? nodeIndexMap.get(toId) : undefined;
+      const result =
+        from !== undefined && to !== undefined && data ? findPath(adjacency, data.edges, from, to) : null;
+      setActivePath({
+        fromId: from !== undefined ? fromId : null,
+        toId: to !== undefined ? toId : null,
+        result
+      });
+      if (result) {
+        clearFilters();
+        setSelectedGenre(null);
+        canvasRef.current?.fitToIndices(result.nodes);
+      }
+    },
+    [nodeIndexMap, adjacency, data, clearFilters]
+  );
+
+  const handleTracePath = useCallback(
+    (artistId: string) => handleSetPathEnds(artistId, null),
+    [handleSetPathEnds]
+  );
+  const handleOpenPathPanel = useCallback(
+    () => setActivePath((current) => current ?? { fromId: selectedArtistId, toId: null, result: null }),
+    [selectedArtistId]
+  );
+
+  const handleCloseArtist = useCallback(() => setSelectedArtistId(null), []);
+  const handleCloseGenre = useCallback(() => setSelectedGenre(null), []);
+  const handleClosePath = useCallback(() => setActivePath(null), []);
+  const handleSelectArtistAndFly = useCallback(
+    (id: string) => handleSelectArtist(id, true),
+    [handleSelectArtist]
+  );
+  const handleFitIndices = useCallback((indices: number[]) => canvasRef.current?.fitToIndices(indices), []);
+  const handlePanelDragStateChange = useCallback((offset: number, dragging: boolean) => {
+    setMobileDragOffset(offset);
+    setIsMobileDragging(dragging);
   }, []);
+  const handleSamplePlay = useCallback(() => setIsPlayingAudio(false), []);
+
+  // Canvas highlight for the active path, else the open genre's artists and the links among them
+  const genreMemberIndices = selectedGenre ? genreMembers.get(selectedGenre) : undefined;
+  const spotlight = useMemo<Spotlight | null>(() => {
+    if (activePath?.result) {
+      return { kind: 'path', pointIndices: activePath.result.nodes, linkIndices: activePath.result.edges };
+    }
+    if (!genreMemberIndices || !data) return null;
+    const isMember = new Uint8Array(data.nodes.length);
+    for (const idx of genreMemberIndices) isMember[idx] = 1;
+    const linkIndices: number[] = [];
+    data.edges.forEach((edge, i) => {
+      if (isMember[edge.sourceIndex!] && isMember[edge.targetIndex!]) linkIndices.push(i);
+    });
+    return { kind: 'genre', pointIndices: genreMemberIndices, linkIndices };
+  }, [activePath, genreMemberIndices, data]);
 
   const handleCanvasReady = useCallback(() => {
     setIsCanvasReady(true);
   }, []);
 
-  // Fly to the deep-linked artist once the canvas can navigate
+  // Apply the deep-linked view once the canvas can navigate: a path or genre first, then the artist on top
+  const hasAppliedDeepLinkRef = useRef(false);
   useEffect(() => {
-    if (isCanvasReady && INITIAL_ARTIST_ID && nodeMap.has(INITIAL_ARTIST_ID)) {
-      handleSelectArtist(INITIAL_ARTIST_ID, true);
-    }
-  }, [isCanvasReady, nodeMap, handleSelectArtist]);
+    if (!isCanvasReady || hasAppliedDeepLinkRef.current) return;
+    hasAppliedDeepLinkRef.current = true;
+    const from = INITIAL_PARAMS.get(FROM_PARAM);
+    const to = INITIAL_PARAMS.get(TO_PARAM);
+    const genre = genreBySlug.get(INITIAL_PARAMS.get(GENRE_PARAM) ?? '');
+    const artistId = INITIAL_PARAMS.get(ARTIST_PARAM);
+    if (from && to) handleSetPathEnds(from, to);
+    else if (genre) handleSelectGenre(genre);
+    if (artistId && nodeMap.has(artistId)) handleSelectArtist(artistId, true);
+  }, [isCanvasReady, genreBySlug, nodeMap, handleSetPathEnds, handleSelectGenre, handleSelectArtist]);
 
-  // Mirror the selected artist into the URL so the current view is shareable
+  // Mirror the current view into the URL so it is shareable
   useEffect(() => {
     if (!isCanvasReady) return;
     const url = new URL(window.location.href);
-    if (selectedArtistId) url.searchParams.set(ARTIST_PARAM, selectedArtistId);
-    else url.searchParams.delete(ARTIST_PARAM);
+    const params: [string, string | null][] = [
+      [ARTIST_PARAM, selectedArtistId],
+      [GENRE_PARAM, selectedGenre ? slugify(selectedGenre) : null],
+      [FROM_PARAM, activePath?.fromId ?? null],
+      [TO_PARAM, activePath?.toId ?? null]
+    ];
+    for (const [key, value] of params) {
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
     window.history.replaceState(null, '', url);
-  }, [isCanvasReady, selectedArtistId]);
+  }, [isCanvasReady, selectedArtistId, selectedGenre, activePath]);
 
   const handleTogglePreview = useCallback((artist: AtlasNode) => {
     setActiveAudioArtist((current) => {
@@ -164,8 +293,11 @@ export const App: React.FC = () => {
   // Active audio artist ref for keyboard shortcuts
   const activeAudioArtistRef = useRef(activeAudioArtist);
   activeAudioArtistRef.current = activeAudioArtist;
+  // Layers Escape closes, top first: artist drawer, then genre panel, then path
+  const escapeLayersRef = useRef({ selectedArtistId, selectedGenre, activePath });
+  escapeLayersRef.current = { selectedArtistId, selectedGenre, activePath };
 
-  // Global keyboard shortcuts (Escape to deselect artist or close modal, Space to toggle active audio preview)
+  // Global keyboard shortcuts (Escape to close the top layer or modal, Space to toggle active audio preview)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -173,6 +305,7 @@ export const App: React.FC = () => {
         target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
+          target.tagName === 'AUDIO' ||
           target.isContentEditable);
 
       if (e.key === 'Escape') {
@@ -181,7 +314,10 @@ export const App: React.FC = () => {
           return;
         }
         if (!isInputFocused) {
-          setSelectedArtistId(null);
+          const layers = escapeLayersRef.current;
+          if (layers.selectedArtistId) setSelectedArtistId(null);
+          else if (layers.selectedGenre) setSelectedGenre(null);
+          else if (layers.activePath) setActivePath(null);
         }
         return;
       }
@@ -196,6 +332,8 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showAbout, handleCloseAbout]);
+
+  const isPanelOpen = Boolean(selectedArtist || genreMemberIndices);
 
   if (error) {
     return (
@@ -246,8 +384,9 @@ export const App: React.FC = () => {
         continentIndicesMap={continentIndicesMap}
         sortedGlobalIndices={sortedGlobalIndices}
         sortedContinentIndices={sortedContinentIndices}
-        neighborMap={neighborMap}
+        adjacency={adjacency}
         selectedNodeId={selectedArtistId}
+        spotlight={spotlight}
         onSelectNode={handleSelectArtist}
         selectedContinentId={selectedContinentId}
         densityRange={densityRange}
@@ -271,8 +410,10 @@ export const App: React.FC = () => {
         {/* Global Search Bar (Expands on Mobile) */}
         <div className="pointer-events-auto flex-1 min-w-0 max-w-none sm:max-w-md">
           <SearchBar
-            nodes={data.nodes}
-            onSelectArtist={(artistId) => handleSelectArtist(artistId, true)}
+            searchIndex={searchIndex}
+            genreIndex={genreSearchIndex}
+            onSelectArtist={handleSelectArtistAndFly}
+            onSelectGenre={handleSelectGenre}
             selectedArtistId={selectedArtistId}
           />
         </div>
@@ -291,6 +432,14 @@ export const App: React.FC = () => {
           />
 
           <button
+            onClick={handleOpenPathPanel}
+            className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
+            title="Trace a path between two artists"
+          >
+            <Route className="w-4 h-4" />
+          </button>
+
+          <button
             onClick={() => setShowAbout(true)}
             className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
             title="About Music Atlas"
@@ -299,8 +448,15 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Mobile Info Button */}
-        <div className="flex sm:hidden pointer-events-auto items-center">
+        {/* Mobile Path & Info Buttons */}
+        <div className="flex sm:hidden pointer-events-auto items-center gap-2">
+          <button
+            onClick={handleOpenPathPanel}
+            className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
+            title="Trace a path between two artists"
+          >
+            <Route className="w-4 h-4" />
+          </button>
           <button
             onClick={() => setShowAbout(true)}
             className="glass-panel h-10 w-10 flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors shadow-xl shrink-0"
@@ -327,6 +483,24 @@ export const App: React.FC = () => {
           align="left"
         />
       </div>
+
+      {/* Path panel: below the header, kept clear of the desktop inspector; on mobile below the continents pill and left of the zoom column */}
+      {activePath && (
+        <div className="fixed z-30 left-4 right-16 sm:right-auto sm:w-[min(560px,calc(100vw_-_2rem))] md:w-[min(560px,calc(100vw_-_21rem))] lg:w-[min(560px,calc(100vw_-_27rem))] top-[calc(max(1rem,env(safe-area-inset-top))_+_96px)] sm:top-[calc(max(1rem,env(safe-area-inset-top))_+_52px)] pointer-events-auto">
+          <PathCard
+            from={activePath.fromId ? nodeMap.get(activePath.fromId) ?? null : null}
+            to={activePath.toId ? nodeMap.get(activePath.toId) ?? null : null}
+            path={activePath.result}
+            nodes={data.nodes}
+            edges={data.edges}
+            searchIndex={searchIndex}
+            selectedArtistId={selectedArtistId}
+            onChangeEnds={handleSetPathEnds}
+            onSelectArtist={handleSelectArtistAndFly}
+            onClose={handleClosePath}
+          />
+        </div>
+      )}
 
       {/* Floating Zoom & Reset View Controls */}
       {/* Desktop: Bottom-Left */}
@@ -400,7 +574,7 @@ export const App: React.FC = () => {
         {activeAudioArtist && (
           <div
             style={{
-              marginBottom: selectedArtist ? '6px' : 'max(12px, env(safe-area-inset-bottom))',
+              marginBottom: isPanelOpen ? '6px' : 'max(12px, env(safe-area-inset-bottom))',
               transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
               transition: isMobileDragging
                 ? 'none'
@@ -421,8 +595,8 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Single Floating Artist Inspector */}
-        {selectedArtist && (
+        {/* Single Floating Inspector: the artist drawer sits on top of an open genre panel */}
+        {isPanelOpen && (
           <div
             style={{
               transform: mobileDragOffset !== 0 ? `translateY(${mobileDragOffset}px)` : undefined,
@@ -432,19 +606,39 @@ export const App: React.FC = () => {
             }}
             className="pointer-events-auto w-full md:w-auto md:fixed md:top-[72px] md:bottom-24 md:right-4 lg:right-6 md:z-[60] flex justify-center md:justify-end"
           >
-            <ArtistDrawer
-              key={selectedArtist.id}
-              artist={selectedArtist}
-              onClose={() => setSelectedArtistId(null)}
-              onSelectNeighbor={(id) => handleSelectArtist(id, true)}
-              isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
-              onTogglePreview={handleTogglePreview}
-              currentlyPlayingId={activeAudioArtist?.id || null}
-              onDragStateChange={(offset, dragging) => {
-                setMobileDragOffset(offset);
-                setIsMobileDragging(dragging);
-              }}
-            />
+            {selectedArtist ? (
+              <ArtistDrawer
+                key={selectedArtist.id}
+                artist={selectedArtist}
+                onClose={handleCloseArtist}
+                onSelectNeighbor={handleSelectArtistAndFly}
+                onSelectGenre={handleSelectGenre}
+                onTracePath={handleTracePath}
+                isPlayingPreview={isPlayingAudio && activeAudioArtist?.id === selectedArtist.id}
+                onTogglePreview={handleTogglePreview}
+                currentlyPlayingId={activeAudioArtist?.id || null}
+                onDragStateChange={handlePanelDragStateChange}
+              />
+            ) : (
+              selectedGenre &&
+              genreMemberIndices && (
+                <GenrePanel
+                  key={selectedGenre}
+                  genre={selectedGenre}
+                  members={genreMemberIndices}
+                  nodes={data.nodes}
+                  continents={data.continents}
+                  genreMembers={genreMembers}
+                  onClose={handleCloseGenre}
+                  onSelectArtist={handleSelectArtistAndFly}
+                  onSelectGenre={handleSelectGenre}
+                  onFitIndices={handleFitIndices}
+                  isPlayingPreview={isPlayingAudio && activeAudioArtist !== null}
+                  onSamplePlay={handleSamplePlay}
+                  onDragStateChange={handlePanelDragStateChange}
+                />
+              )
+            )}
           </div>
         )}
       </div>

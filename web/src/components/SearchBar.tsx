@@ -1,100 +1,67 @@
-import React, { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react';
-import { Search, X } from 'lucide-react';
-import { AtlasNode } from '../types/atlas';
-import { buildSearchIndex, searchArtists } from '../utils/searchEngine';
-import { filterValidSubgenres } from '../utils/artistUtils';
+import React, { useEffect, useMemo } from 'react';
+import { Search, X, Tags } from 'lucide-react';
+import { IndexedNode, IndexedGenre, searchArtists, searchGenres } from '../utils/searchEngine';
+import { useSearchDropdown } from '../hooks/useSearchDropdown';
+import { ArtistResultRow } from './search/ArtistResultRow';
 
 interface SearchBarProps {
-  nodes: AtlasNode[];
+  searchIndex: IndexedNode[];
+  genreIndex: IndexedGenre[];
   onSelectArtist: (artistId: string) => void;
+  onSelectGenre: (genre: string) => void;
   selectedArtistId: string | null;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
-  nodes,
+  searchIndex,
+  genreIndex,
   onSelectArtist,
+  onSelectGenre,
   selectedArtistId
 }) => {
-  const [query, setQuery] = useState('');
-  const [isOpen, setIsOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState<number>(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const {
+    query,
+    setQuery,
+    deferredQuery,
+    isOpen,
+    setIsOpen,
+    activeIndex,
+    setActiveIndex,
+    containerRef,
+    inputRef,
+    close,
+    handleKeyDown
+  } = useSearchDropdown();
 
-  // Defer query updates so typing remains smooth at 120 FPS
-  const deferredQuery = useDeferredValue(query);
+  const genreResults = useMemo(() => searchGenres(genreIndex, deferredQuery), [genreIndex, deferredQuery]);
+  const artistResults = useMemo(() => searchArtists(searchIndex, deferredQuery), [searchIndex, deferredQuery]);
+  const resultCount = genreResults.length + artistResults.length;
 
-  // Pre-indexed search metadata pre-sorted by popularity (subscribers desc)
-  const indexedNodes = useMemo(() => {
-    return buildSearchIndex(nodes);
-  }, [nodes]);
-
-  // Ultra-fast tiered matching over pre-indexed nodes
-  const filteredArtists = useMemo(() => {
-    return searchArtists(indexedNodes, deferredQuery);
-  }, [indexedNodes, deferredQuery]);
-
-  // Reset active keyboard index when search results change
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [filteredArtists]);
-
-  const handleSelect = (id: string) => {
-    onSelectArtist(id);
-    setIsOpen(false);
-    setQuery('');
+  // Genres are listed first, so row indices below genreResults.length are genres
+  const pick = (index: number) => {
+    if (index < genreResults.length) onSelectGenre(genreResults[index].name);
+    else onSelectArtist(artistResults[index - genreResults.length].id);
+    close();
+    inputRef.current?.blur();
   };
 
-  // Global keyboard shortcuts and dropdown navigation
+  // Global shortcut to focus search: Ctrl+K or '/'
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        (e.ctrlKey && e.key === 'k') ||
-        (e.key === '/' && document.activeElement !== inputRef.current)
-      ) {
+    const handleShortcut = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isTyping = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && !isTyping)) {
         e.preventDefault();
         inputRef.current?.focus();
         setIsOpen(true);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setIsOpen(false);
-        inputRef.current?.blur();
-        return;
-      }
-
-      if (isOpen && filteredArtists.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setActiveIndex((prev) => (prev + 1) % filteredArtists.length);
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setActiveIndex((prev) => (prev - 1 + filteredArtists.length) % filteredArtists.length);
-        } else if (e.key === 'Enter') {
-          if (activeIndex >= 0 && activeIndex < filteredArtists.length) {
-            e.preventDefault();
-            handleSelect(filteredArtists[activeIndex].id);
-          }
-        }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filteredArtists, activeIndex]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (e: PointerEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handleClickOutside);
-    return () => document.removeEventListener('pointerdown', handleClickOutside);
-  }, []);
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, [inputRef, setIsOpen]);
 
   return (
-    <div className="relative w-full" ref={dropdownRef}>
+    <div className="relative w-full" ref={containerRef}>
       <div className="glass-panel h-10 flex items-center px-3 sm:px-3.5 shadow-xl transition-all focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
         <Search className="w-4 h-4 text-slate-400 mr-2 sm:mr-2.5 shrink-0" />
         <input
@@ -106,6 +73,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             setIsOpen(true);
           }}
           onFocus={() => setIsOpen(true)}
+          onKeyDown={(e) => handleKeyDown(e, resultCount, pick)}
           placeholder="Search artist or genre..."
           className="w-full bg-transparent border-none outline-none text-base sm:text-sm text-slate-100 placeholder-slate-500 min-w-0"
         />
@@ -128,73 +96,41 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       </div>
 
       {/* Autocomplete Dropdown */}
-      {isOpen && filteredArtists.length > 0 && (
+      {isOpen && resultCount > 0 && (
         <div className="absolute left-0 right-0 top-full mt-2 glass-panel p-1.5 shadow-2xl z-50 max-h-96 overflow-y-auto border border-white/20">
-          {filteredArtists.map((artist, idx) => {
-            const cleanSubgenres = filterValidSubgenres(artist.topSubgenres);
-            const firstSubgenre = cleanSubgenres[0] || '';
-            const rawPrimary = artist.primaryGenre ? artist.primaryGenre.trim() : '';
-            const hasPrimary = Boolean(
-              rawPrimary &&
-                !['other', 'artist', 'unknown', 'eclectic'].includes(rawPrimary.toLowerCase()) &&
-                (!firstSubgenre || rawPrimary.toLowerCase() !== firstSubgenre.toLowerCase())
-            );
+          {genreResults.map((genre, idx) => (
+            <button
+              key={`genre-${genre.name}`}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setActiveIndex(idx)}
+              onClick={() => pick(idx)}
+              className={`w-full flex items-center gap-3 p-2 rounded-lg cursor-pointer text-left ${
+                activeIndex === idx ? 'bg-white/15 text-white' : 'hover:bg-white/10 text-slate-200'
+              }`}
+            >
+              <div className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center bg-emerald-500/10 border-2 border-emerald-500/40">
+                <Tags className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <span className="text-sm font-semibold text-white truncate leading-tight">{genre.name}</span>
+                <span className="text-xs text-slate-400 truncate mt-0.5 leading-tight">
+                  Genre · {genre.artistCount.toLocaleString()} artists
+                </span>
+              </div>
+            </button>
+          ))}
 
-            let genreDisplay = '';
-            if (hasPrimary && firstSubgenre) {
-              genreDisplay = `${rawPrimary} • ${firstSubgenre}`;
-            } else if (hasPrimary) {
-              genreDisplay = rawPrimary;
-            } else if (firstSubgenre) {
-              genreDisplay = firstSubgenre;
-            }
-
-            const isActive = activeIndex === idx;
-
+          {artistResults.map((artist, idx) => {
+            const rowIndex = genreResults.length + idx;
             return (
-              <button
+              <ArtistResultRow
                 key={artist.id}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                }}
-                onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => handleSelect(artist.id)}
-                className={`w-full flex items-center gap-3 p-2 rounded-lg cursor-pointer text-left ${
-                  isActive || selectedArtistId === artist.id
-                    ? 'bg-white/15 text-white'
-                    : 'hover:bg-white/10 text-slate-200'
-                }`}
-              >
-                {/* Artist Icon with background border of that artist's color */}
-                <div
-                  className="w-9 h-9 rounded-full shrink-0 overflow-hidden flex items-center justify-center bg-white/5 border-2"
-                  style={{ borderColor: artist.color }}
-                >
-                  <img
-                    src={artist.image}
-                    alt={artist.label}
-                    referrerPolicy="no-referrer"
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
-                </div>
-
-                {/* Vertically aligned Name and Genre */}
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                  <span className="text-sm font-semibold text-white truncate leading-tight">
-                    {artist.label}
-                  </span>
-                  {genreDisplay ? (
-                    <span className="text-xs text-slate-400 truncate mt-0.5 leading-tight">
-                      {genreDisplay}
-                    </span>
-                  ) : null}
-                </div>
-              </button>
+                artist={artist}
+                isActive={activeIndex === rowIndex || selectedArtistId === artist.id}
+                onHover={() => setActiveIndex(rowIndex)}
+                onPick={() => pick(rowIndex)}
+              />
             );
           })}
         </div>

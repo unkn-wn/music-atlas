@@ -7,8 +7,9 @@ import {
   applyZoomLimits,
   hookCosmographLabels
 } from './canvas/canvasUtils';
-import { applyCosmographSelection } from './canvas/canvasSelection';
+import { applyCosmographSelection, Spotlight } from './canvas/canvasSelection';
 import { renderCanvasOverlay } from './canvas/canvasOverlay';
+import { GraphAdjacency } from '../utils/graphPath';
 
 export { getArtistNodeDiameter };
 
@@ -17,6 +18,7 @@ export interface AtlasCanvasHandle {
   zoomOut: () => void;
   resetView: () => void;
   flyToNode: (nodeId: string) => void;
+  fitToIndices: (indices: number[]) => void;
 }
 
 interface AtlasCanvasProps {
@@ -26,8 +28,9 @@ interface AtlasCanvasProps {
   continentIndicesMap: Map<number, number[]>;
   sortedGlobalIndices: number[];
   sortedContinentIndices: Map<number, number[]>;
-  neighborMap: Map<string, string[]>;
+  adjacency: GraphAdjacency;
   selectedNodeId: string | null;
+  spotlight: Spotlight | null;
   onSelectNode: (nodeId: string | null) => void;
   selectedContinentId: number | null;
   densityRange: [number, number] | null;
@@ -45,8 +48,9 @@ export const AtlasCanvas = React.memo(
         continentIndicesMap,
         sortedGlobalIndices,
         sortedContinentIndices,
-        neighborMap,
+        adjacency,
         selectedNodeId,
+        spotlight,
         onSelectNode,
         selectedContinentId,
         densityRange,
@@ -76,11 +80,24 @@ export const AtlasCanvas = React.memo(
       sortedGlobalIndicesRef.current = sortedGlobalIndices;
       const sortedContinentIndicesRef = useRef(sortedContinentIndices);
       sortedContinentIndicesRef.current = sortedContinentIndices;
-      const neighborMapRef = useRef(neighborMap);
-      neighborMapRef.current = neighborMap;
+      const adjacencyRef = useRef(adjacency);
+      adjacencyRef.current = adjacency;
+
+      // Path artists keep their avatar and label on screen however far out the camera is
+      const pinnedIds = React.useMemo(
+        () =>
+          spotlight?.kind === 'path'
+            ? new Set(spotlight.pointIndices.map((idx) => nodes[idx].id))
+            : null,
+        [spotlight, nodes]
+      );
+      const pinnedIdsRef = useRef(pinnedIds);
+      pinnedIdsRef.current = pinnedIds;
 
       const selectedNodeIdRef = useRef<string | null>(selectedNodeId);
       selectedNodeIdRef.current = selectedNodeId;
+      const spotlightRef = useRef<Spotlight | null>(spotlight);
+      spotlightRef.current = spotlight;
       const selectedContinentIdRef = useRef<number | null>(selectedContinentId);
       selectedContinentIdRef.current = selectedContinentId;
       const densityRangeRef = useRef<[number, number] | null>(densityRange);
@@ -93,11 +110,13 @@ export const AtlasCanvas = React.memo(
       const hoveredPointIndexRef = useRef<number | null>(null);
       const lastAppliedRef = useRef<{
         nodeId: string | null;
+        spotlight: Spotlight | null;
         continentId: number | null;
         rangeKey: string | null;
         connectionPercentile: number;
       }>({
         nodeId: null,
+        spotlight: null,
         continentId: null,
         rangeKey: null,
         connectionPercentile: 0
@@ -217,8 +236,9 @@ export const AtlasCanvas = React.memo(
           cosmo,
           nodes: nodesRef.current,
           nodeIndexMap: nodeIndexMapRef.current,
-          neighborMap: neighborMapRef.current,
+          adjacency: adjacencyRef.current,
           selectedNodeId: selectedNodeIdRef.current,
+          pinnedIds: pinnedIdsRef.current,
           hoveredPointIndex: hoveredPointIndexRef.current,
           isNodeQualifying: isNodeQualifyingRef.current,
           scheduleDrawAvatars: scheduleDrawAvatarsRef.current
@@ -258,11 +278,13 @@ export const AtlasCanvas = React.memo(
       const applySelectionState = useCallback(
         (
           targetNodeId: string | null,
-          targetContinentId: number | null = null,
-          targetDensityRange: [number, number] | null = null,
-          targetConnectionPercentile: number = 0
+          targetSpotlight: Spotlight | null,
+          targetContinentId: number | null,
+          targetDensityRange: [number, number] | null,
+          targetConnectionPercentile: number
         ) => {
           selectedNodeIdRef.current = targetNodeId;
+          spotlightRef.current = targetSpotlight;
           selectedContinentIdRef.current = targetContinentId;
           densityRangeRef.current = targetDensityRange;
           connectionPercentileRef.current = targetConnectionPercentile;
@@ -272,6 +294,7 @@ export const AtlasCanvas = React.memo(
             : null;
           lastAppliedRef.current = {
             nodeId: targetNodeId,
+            spotlight: targetSpotlight,
             continentId: targetContinentId,
             rangeKey: targetRangeKey,
             connectionPercentile: targetConnectionPercentile
@@ -281,6 +304,7 @@ export const AtlasCanvas = React.memo(
             cosmographRef.current,
             {
               targetNodeId,
+              spotlight: targetSpotlight,
               targetContinentId,
               targetDensityRange,
               targetConnectionPercentile,
@@ -409,6 +433,7 @@ export const AtlasCanvas = React.memo(
               if (node && isNodeQualifyingRef.current(node.id, index)) {
                 applySelectionState(
                   node.id,
+                  spotlightRef.current,
                   selectedContinentIdRef.current,
                   densityRangeRef.current,
                   connectionPercentileRef.current
@@ -419,6 +444,7 @@ export const AtlasCanvas = React.memo(
             }
             applySelectionState(
               null,
+              spotlightRef.current,
               selectedContinentIdRef.current,
               densityRangeRef.current,
               connectionPercentileRef.current
@@ -548,6 +574,17 @@ export const AtlasCanvas = React.memo(
 
             cosmo.zoomToPoint(index, 750);
             runAnimationLoop(800);
+          },
+          fitToIndices: (indices: number[]) => {
+            const cosmo = cosmographRef.current as any;
+            if (!cosmo || indices.length === 0) return;
+            // Fitting a single point would zoom all the way in
+            if (indices.length === 1) {
+              cosmo.zoomToPoint(indices[0], 750);
+            } else {
+              cosmo.fitViewByIndices(indices, 750, 0.15);
+            }
+            runAnimationLoop(800);
           }
         }),
         [runAnimationLoop]
@@ -558,14 +595,22 @@ export const AtlasCanvas = React.memo(
       useEffect(() => {
         if (
           lastAppliedRef.current.nodeId !== selectedNodeId ||
+          lastAppliedRef.current.spotlight !== spotlight ||
           lastAppliedRef.current.continentId !== selectedContinentId ||
           lastAppliedRef.current.rangeKey !== rangeKey ||
           lastAppliedRef.current.connectionPercentile !== connectionPercentile
         ) {
-          applySelectionState(selectedNodeId, selectedContinentId, densityRange, connectionPercentile);
+          applySelectionState(
+            selectedNodeId,
+            spotlight,
+            selectedContinentId,
+            densityRange,
+            connectionPercentile
+          );
         }
       }, [
         selectedNodeId,
+        spotlight,
         selectedContinentId,
         rangeKey,
         densityRange,

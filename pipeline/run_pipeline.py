@@ -8,6 +8,7 @@ Runs stages sequentially:
 5. Stage 4: Salton's Cosine Normalization & Dynamic Degree Bounds (04_normalize_and_sparsify.py)
 6. Stage 5: Macro-Continents & Spatial Layout Simulation (05_community_and_layout.py)
 7. Stage 6: Final Web Artifact Export atlas-graph.json (06_export_web_artifacts.py)
+8. Stage 7: Wikidata & Commons Genre Enrichment genre-info.json (07_enrich_genres.py)
 """
 
 import os
@@ -31,7 +32,8 @@ STEPS = [
     ("03_build_cooccurrence.py", "Stage 3: Sparse CSR Matrix Bipartite Projection", 3),
     ("04_normalize_and_sparsify.py", "Stage 4: Salton's Cosine Normalization & Dynamic Degree Bounds", 4),
     ("05_community_and_layout.py", "Stage 5: Macro-Continents & Spatial Layout Simulation", 5),
-    ("06_export_web_artifacts.py", "Stage 6: Final Web Artifact Export (atlas-graph.json)", 6)
+    ("06_export_web_artifacts.py", "Stage 6: Final Web Artifact Export (atlas-graph.json)", 6),
+    ("07_enrich_genres.py", "Stage 7: Wikidata & Commons Genre Enrichment (genre-info.json)", 7)
 ]
 
 def main():
@@ -42,7 +44,7 @@ def main():
     parser.add_argument("--min-playlists", type=int, default=4, help="Minimum playlist threshold c_i for candidate survival in Stage 2 (default: 4)")
     parser.add_argument("--offline", action="store_true", help="Bypass external HTTP calls; use disk cache & local snapshots")
     parser.add_argument("--skip-harvest", action="store_true", help="Skip Stages 0 and 1; start from Stage 2")
-    parser.add_argument("--from-step", type=int, default=0, choices=range(0, 7), help="Start pipeline execution from specific step number (0-6)")
+    parser.add_argument("--from-step", type=int, default=0, choices=range(0, 8), help="Start pipeline execution from specific step number (0-7)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh by clearing checkpoints and re-harvesting all genres")
     parser.add_argument("--clear-cache", action="store_true", help="Wipe intermediate output files in pipeline/output/ before running")
     parser.add_argument("--target-continents", type=int, default=256, help="Target macro continents count in Stage 5 (default: 256)")
@@ -102,6 +104,9 @@ def main():
                 cmd.append("--revisit")
         elif step_idx == 2:
             cmd.extend(["--min-playlists", str(args.min_playlists)])
+            if args.offline:
+                cmd.append("--offline")
+        elif step_idx == 7:
             if args.offline:
                 cmd.append("--offline")
         elif step_idx == 5:

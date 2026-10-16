@@ -62,7 +62,7 @@ The pipeline consists of clean, decoupled stages in `pipeline/`:
 5. `04_normalize_and_sparsify.py`: Calculates cosine similarity, Jaccard coefficients, and k-NN sparsification.
 6. `05_community_and_layout.py`: Dynamic continental partitioning, gentle genre macro-initialization, strong-gravity ForceAtlas2 simulation, radial knee compression, and disk clearance.
 7. `06_export_web_artifacts.py`: Exports compact `atlas-graph.json` with adaptive affinity connections (6 to 20 links) directly to `web/public/data/atlas-graph.json`.
-8. `07_enrich_genres.py`: Attaches human-curated Wikidata facts (description, inception, Wikipedia link) and free Commons audio samples to genres whose name exactly matches one Wikidata music-genre label (no hand mapping), writing `web/public/data/genre-info.json`.
+8. `07_enrich_genres.py`: Attaches human-curated Wikidata facts (description, inception, Wikipedia link) to genres whose name exactly matches the English label, or failing that an alias, of exactly one Wikidata music-genre item (no hand mapping), writing `web/public/data/genre-info.json`.
 
 Master Runner:
 

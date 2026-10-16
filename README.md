@@ -19,7 +19,7 @@ Every node, connection, genre tag, and metric emerges organically from real-worl
 - **Instant Search (`Ctrl+K` or `/`)**: Global fuzzy search across artists, genres, and continents with smooth camera fly-to animations.
 - **Continent Filter HUD**: Filter the entire galaxy by macro continent with interactive artist counts and color swatches.
 - **Degrees of Separation ("Trace path")**: From an artist's drawer (or the route button in the header), pick a second artist to see the shortest chain of shared-playlist connections between them (ties broken by the strongest links), lit up on the map with a shareable `?from=&to=` link.
-- **Genre Panels**: Open any genre from search or an artist's subgenre tags to see its artists by popularity, the continents they live in, related genres (by shared artists), and, where Wikidata has an exact match, when it emerged plus a free-licensed Wikimedia Commons sample. Shareable via `?genre=<slug>`, with crawlable `/genres/` pages.
+- **Genre Panels**: Open any genre from search or an artist's subgenre tags to see its artists by popularity, the continents they live in, related genres (by shared artists), and, where Wikidata has an exact match, a short description and when it emerged. Shareable via `?genre=<slug>`, with crawlable `/genres/` pages.
 - **About & Methodology Modal**: Built-in guide detailing data provenance (EveryNoise, YouTube Music, Deezer), map visual legend (nodes, connections, colors), and issue reporting links to GitHub and email.
 
 
@@ -40,7 +40,7 @@ The entire universe is built on **one cardinal rule**:
 │ 4. Cosine Similarity Normalization & Adaptive Sparsification │
 │ 5. Louvain Community Detection & ForceAtlas2 Physics Layout  │
 │ 6. Export Compact Web Artifact (atlas-graph.json)            │
-│ 7. Wikidata & Commons Genre Enrichment (genre-info.json)     │
+│ 7. Wikidata Genre Enrichment (genre-info.json)               │
 └──────────────────────────────┬───────────────────────────────┘
                                │
                                ▼
@@ -86,8 +86,8 @@ The entire universe is built on **one cardinal rule**:
 - Exports the bundled graph directly to `web/public/data/atlas-graph.json`.
 
 ### 6. Stage 7: Genre Enrichment (`07_enrich_genres.py`)
-- Matches each atlas subgenre to a Wikidata music-genre item by **exact** English label (case-insensitive). Genres with no match or several matches get nothing; there is no hand mapping.
-- Attaches the item's description, inception date, English Wikipedia article and its Commons audio sample (MP3 transcode, license and author), skipping files Commons categorises as AI-generated.
+- Matches each atlas subgenre to a Wikidata music-genre item by **exact** English label, or failing that by one of the item's English aliases (case-insensitive). Genres with no match or several matches get nothing; there is no hand mapping.
+- Attaches the item's description, inception date and English Wikipedia article.
 - Writes `web/public/data/genre-info.json`, loaded lazily by the genre panel. `--offline` keeps the existing file.
 
 ---
@@ -149,7 +149,7 @@ music-atlas/
 │   ├── 04_normalize_and_sparsify.py   # Salton's Cosine similarity & degree bounds
 │   ├── 05_community_and_layout.py     # Louvain continents & ForceAtlas2 layout simulation
 │   ├── 06_export_web_artifacts.py     # Exports web/public/data/atlas-graph.json & .gz
-│   ├── 07_enrich_genres.py            # Wikidata/Commons genre facts & samples (genre-info.json)
+│   ├── 07_enrich_genres.py            # Wikidata genre descriptions & dates (genre-info.json)
 │   ├── run_pipeline.py                # Master CLI runner with checkpointing
 │   ├── sanitizer.py                   # Strict Unicode sanitization & prefix parsing
 │   └── requirements.txt               # Python dependencies
@@ -184,4 +184,3 @@ music-atlas/
   - Artist images, audio preview URLs and fan counts come from the [Deezer API](https://developers.deezer.com/) and are governed by Deezer's terms.
   - Genre names come from [EveryNoise at Once](https://everynoise.com/).
   - Genre descriptions and inception dates come from [Wikidata](https://www.wikidata.org/) (CC0).
-  - Genre audio samples are files on [Wikimedia Commons](https://commons.wikimedia.org/), each under its own license, shown next to the sample in the app.

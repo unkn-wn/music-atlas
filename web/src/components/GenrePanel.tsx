@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Tags, Users, Globe2, Sparkles, ExternalLink, Music2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { X, Tags, Users, Globe2, Sparkles, ExternalLink } from 'lucide-react';
 import { AtlasNode, Continent } from '../types/atlas';
 import { SheetPanel } from './panel/SheetPanel';
 import { useGenreInfo } from '../hooks/useGenreInfo';
@@ -22,9 +22,6 @@ interface GenrePanelProps {
   onSelectArtist: (artistId: string) => void;
   onSelectGenre: (genre: string) => void;
   onFitIndices: (indices: number[]) => void;
-  /** A Deezer preview is playing: the Commons sample pauses so the two never overlap */
-  isPlayingPreview: boolean;
-  onSamplePlay: () => void;
   onDragStateChange?: (offsetY: number, isDragging: boolean) => void;
 }
 
@@ -45,17 +42,10 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
   onSelectArtist,
   onSelectGenre,
   onFitIndices,
-  isPlayingPreview,
-  onSamplePlay,
   onDragStateChange
 }) => {
   const [shownCount, setShownCount] = useState(INITIAL_ARTISTS_SHOWN);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const info = useGenreInfo(genre);
-
-  useEffect(() => {
-    if (isPlayingPreview) audioRef.current?.pause();
-  }, [isPlayingPreview]);
 
   const continentGroups = useMemo(() => {
     const byId = new Map(continents.map((c) => [c.id, c]));
@@ -160,35 +150,6 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
                   </>
                 )}
                 <div className="text-[10px] text-slate-500 mt-1">From Wikidata</div>
-              </div>
-            )}
-
-            {/* Free-licensed audio sample from Wikimedia Commons */}
-            {info?.audio && (
-              <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex flex-col gap-2">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-white min-w-0">
-                  <Music2 className="w-3.5 h-3.5 shrink-0" style={{ color: accentColor }} />
-                  <span className="truncate">{info.audio.title}</span>
-                </div>
-                <audio
-                  ref={audioRef}
-                  controls
-                  preload="none"
-                  src={info.audio.src}
-                  onPlay={onSamplePlay}
-                  className="w-full h-8"
-                />
-                <div className="text-[10px] text-slate-500 leading-snug">
-                  {info.audio.author && <>{info.audio.author} · </>}
-                  <a
-                    href={info.audio.page}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:text-slate-300"
-                  >
-                    {info.audio.license || 'Wikimedia Commons'}
-                  </a>
-                </div>
               </div>
             )}
 

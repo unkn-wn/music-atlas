@@ -225,7 +225,6 @@ export const App: React.FC = () => {
     setMobileDragOffset(offset);
     setIsMobileDragging(dragging);
   }, []);
-  const handleSamplePlay = useCallback(() => setIsPlayingAudio(false), []);
 
   // Canvas highlight for the active path, else the open genre's artists and the links among them
   const genreMemberIndices = selectedGenre ? genreMembers.get(selectedGenre) : undefined;
@@ -305,7 +304,6 @@ export const App: React.FC = () => {
         target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
-          target.tagName === 'AUDIO' ||
           target.isContentEditable);
 
       if (e.key === 'Escape') {
@@ -633,8 +631,6 @@ export const App: React.FC = () => {
                   onSelectArtist={handleSelectArtistAndFly}
                   onSelectGenre={handleSelectGenre}
                   onFitIndices={handleFitIndices}
-                  isPlayingPreview={isPlayingAudio && activeAudioArtist !== null}
-                  onSamplePlay={handleSamplePlay}
                   onDragStateChange={handlePanelDragStateChange}
                 />
               )

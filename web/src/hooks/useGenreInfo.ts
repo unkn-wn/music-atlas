@@ -18,7 +18,7 @@ function loadGenreInfo(): Promise<GenreInfoMap> {
   return genreInfoPromise;
 }
 
-/** Wikidata/Commons enrichment for one genre: undefined while loading or when the genre has no exact match. */
+/** Wikidata enrichment for one genre: undefined while loading or when the genre has no exact match. */
 export function useGenreInfo(genre: string): GenreInfo | undefined {
   const [infoMap, setInfoMap] = useState<GenreInfoMap | null>(null);
 

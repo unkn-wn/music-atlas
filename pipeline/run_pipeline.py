@@ -8,7 +8,7 @@ Runs stages sequentially:
 5. Stage 4: Salton's Cosine Normalization & Dynamic Degree Bounds (04_normalize_and_sparsify.py)
 6. Stage 5: Macro-Continents & Spatial Layout Simulation (05_community_and_layout.py)
 7. Stage 6: Final Web Artifact Export atlas-graph.json (06_export_web_artifacts.py)
-8. Stage 7: Wikidata & Commons Genre Enrichment genre-info.json (07_enrich_genres.py)
+8. Stage 7: Wikidata Genre Enrichment genre-info.json (07_enrich_genres.py)
 """
 
 import os
@@ -33,7 +33,7 @@ STEPS = [
     ("04_normalize_and_sparsify.py", "Stage 4: Salton's Cosine Normalization & Dynamic Degree Bounds", 4),
     ("05_community_and_layout.py", "Stage 5: Macro-Continents & Spatial Layout Simulation", 5),
     ("06_export_web_artifacts.py", "Stage 6: Final Web Artifact Export (atlas-graph.json)", 6),
-    ("07_enrich_genres.py", "Stage 7: Wikidata & Commons Genre Enrichment (genre-info.json)", 7)
+    ("07_enrich_genres.py", "Stage 7: Wikidata Genre Enrichment (genre-info.json)", 7)
 ]
 
 def main():

@@ -7,21 +7,12 @@ export interface GenreInception {
   precision: number;
 }
 
-export interface GenreAudioSample {
-  src: string;
-  page: string;
-  title: string;
-  author: string;
-  license: string;
-}
-
-/** One genre's Wikidata/Commons enrichment (pipeline stage 7, genre-info.json) */
+/** One genre's Wikidata enrichment (pipeline stage 7, genre-info.json) */
 export interface GenreInfo {
   wd: string;
   desc?: string;
   since?: GenreInception;
   wiki?: string;
-  audio?: GenreAudioSample;
 }
 
 export interface RelatedGenre {

@@ -1,5 +1,5 @@
 // Vite plugin: a crawlable A–Z artist index (/artists/), a page per genre (/genres/), /sitemap.xml and the
-// artist count in index.html, all from the exported atlas graph (plus pipeline stage 7's genre-info.json).
+// artist count in index.html, all from the exported atlas graph (plus pipeline stage 7's Wikidata genre-info.json).
 // Served by the dev server and written to dist/ on build.
 // Entries deep-link into the atlas via /?artist=<id> and /?genre=<slug>.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -102,8 +102,6 @@ h2{font-size:18px;color:#fff;margin:32px 0 12px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0;margin:0}
 .chips a{display:block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);text-decoration:none;font-size:14px}
 .chips a:hover{border-color:#34d399;color:#34d399}
-.sample{max-width:480px;margin:0 0 8px}
-.sample audio{width:100%}
 .source{font-size:12px;color:#64748b;margin:0 0 8px}
 `;
 
@@ -139,11 +137,6 @@ const genrePageBody = (genre, members, slugs, related, info) => {
   const about = info?.desc
     ? `<p class="lede">${esc(info.desc.charAt(0).toUpperCase() + info.desc.slice(1))}.${era}${info.wiki ? ` <a href="${esc(info.wiki)}">Wikipedia</a>` : ''}</p><p class="source">Description from Wikidata (CC0).</p>`
     : era ? `<p class="lede">${era.trim()}</p>` : '';
-  const sample = info?.audio
-    ? `<h2>Listen: ${esc(info.audio.title)}</h2>
-<div class="sample"><audio controls preload="none" src="${esc(info.audio.src)}"></audio></div>
-<p class="source">${info.audio.author ? `${esc(info.audio.author)} · ` : ''}<a href="${esc(info.audio.page)}">${esc(info.audio.license || 'Wikimedia Commons')}</a></p>`
-    : '';
   const relatedList = related.length
     ? `<h2>Related genres</h2>
 <ul class="chips">${related.map((r) => `<li><a href="/genres/${slugs.get(r.name)}/">${esc(r.name)}</a></li>`).join('')}</ul>`
@@ -152,7 +145,6 @@ const genrePageBody = (genre, members, slugs, related, info) => {
 <p class="lede">${fmt(members.length)} artists on Music Atlas tagged ${esc(genre)}, ranked by listeners. Select one to see who they share playlists with.</p>
 ${about}
 <a class="cta inline" href="/?genre=${slugs.get(genre)}">Open ${esc(genre)} on the map →</a>
-${sample}
 ${relatedList}
 <h2>Artists</h2>
 <ul class="artists">${members

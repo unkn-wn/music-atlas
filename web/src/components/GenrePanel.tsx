@@ -135,21 +135,16 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
             {/* Wikidata description */}
             {info?.desc && (
               <div className="text-xs text-slate-300 leading-relaxed">
-                <p className="first-letter:uppercase inline">{info.desc}</p>
-                {info.wiki && (
-                  <>
-                    {' '}
-                    <a
-                      href={info.wiki}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-emerald-400 hover:text-emerald-300 underline whitespace-nowrap"
-                    >
-                      Wikipedia
-                    </a>
-                  </>
-                )}
-                <div className="text-[10px] text-slate-500 mt-1">From Wikidata</div>
+                <p className="first-letter:uppercase">{info.desc}</p>
+                {/* Source credit doubles as the link: the Wikipedia article, else the Wikidata item */}
+                <a
+                  href={info.wiki ?? `https://www.wikidata.org/wiki/${info.wd}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-[10px] text-slate-500 hover:text-slate-400 underline mt-1 transition-colors"
+                >
+                  From Wikidata
+                </a>
               </div>
             )}
 

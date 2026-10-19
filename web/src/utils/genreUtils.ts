@@ -1,5 +1,6 @@
-// Shared by the app and the static-page Vite plugin (scripts/artist-index-plugin.mjs): keep it free of browser APIs.
+// Shared by the app and the static-page Vite plugin (scripts/site/): keep it free of browser APIs.
 import { normalizeSearchText } from './searchEngine';
+import { Continent } from '../types/atlas';
 
 export interface GenreInception {
   year: number;
@@ -21,6 +22,14 @@ export interface RelatedGenre {
 }
 
 const MAX_RELATED_GENRES = 8;
+
+/** Genres with at least this many artists get a static /genres/<slug>/ page (the app and site plugin check it via hasGenrePage) */
+const GENRE_PAGE_MIN_ARTISTS = 5;
+
+export interface ContinentGroup<T> {
+  continent: Continent;
+  members: T[];
+}
 
 /** URL slug for a genre ("R&B" -> "r-b"); empty when the name has no Latin letters or digits. */
 export function slugify(name: string): string {
@@ -51,6 +60,32 @@ export function findRelatedGenres<T>(
     .sort((a, b) => b.score - a.score || b.count - a.count)
     .slice(0, MAX_RELATED_GENRES)
     .map(({ name, count }) => ({ name, sharedArtists: count }));
+}
+
+export function hasGenrePage(artistCount: number): boolean {
+  return artistCount >= GENRE_PAGE_MIN_ARTISTS;
+}
+
+/** A genre's members grouped by the continent they live in, largest group first */
+export function groupByContinent<T>(
+  members: T[],
+  continents: Continent[],
+  continentIdOf: (member: T) => number
+): ContinentGroup<T>[] {
+  const byId = new Map(continents.map((c) => [c.id, c]));
+  const groups = new Map<number, T[]>();
+  for (const member of members) {
+    const cId = continentIdOf(member);
+    const list = groups.get(cId);
+    if (list) list.push(member);
+    else groups.set(cId, [member]);
+  }
+  return [...groups]
+    .sort((a, b) => b[1].length - a[1].length)
+    .flatMap(([cId, list]) => {
+      const continent = byId.get(cId);
+      return continent ? [{ continent, members: list }] : [];
+    });
 }
 
 /** "1965", "1960s", "9th century", "1999 BCE" (Wikidata has no year 0: -1999 is 1999 BCE) */

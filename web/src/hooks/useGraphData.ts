@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AtlasGraphBundle, AtlasNode, AtlasEdge, ArtistDetail } from '../types/atlas';
-import { hslToHex } from '../utils/color';
+import { continentColor } from '../utils/color';
 import { sanitizeAvatarUrl } from '../utils/imageUtils';
-import { filterValidSubgenres } from '../utils/artistUtils';
+import { filterValidSubgenres, findDuplicateArtistSlugs, parseContinentDetails } from '../utils/artistUtils';
 import { GraphAdjacency, buildAdjacency } from '../utils/graphPath';
 import { slugify } from '../utils/genreUtils';
 import { IndexedNode, IndexedGenre, buildSearchIndex, buildGenreSearchIndex } from '../utils/searchEngine';
@@ -18,22 +18,13 @@ export interface ProcessedGraphData {
   /** Genre name -> member node indices, most subscribers first */
   genreMembers: Map<string, number[]>;
   genreBySlug: Map<string, string>;
+  /** Name slugs shared by several artists, for artist page URLs */
+  duplicateArtistSlugs: Set<string>;
   searchIndex: IndexedNode[];
   genreSearchIndex: IndexedGenre[];
 }
 
 const EMPTY_ADJACENCY = buildAdjacency(0, []);
-
-// Configurable seed to reroll continent colors deterministically
-const CONTINENT_COLOR_SEED = 46;
-
-// Multi-tier palettes combining soft pastel, deep jewel, radiant, and muted tones
-const COLOR_TIERS = [
-  { s: 55, l: 72 }, // Soft Pastel
-  { s: 84, l: 46 }, // Deep Jewel
-  { s: 75, l: 62 }, // Radiant Warm
-  { s: 58, l: 52 }, // Muted Dusty
-];
 
 /**
  * Fetches the atlas graph bundle using streaming gzip decompression with uncompressed fallback.
@@ -75,9 +66,7 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
   if (bundle.continents) {
     bundle.continents.forEach((c) => {
       continentNames.set(c.id, c.name);
-      const hue = Math.round((c.id * 137.508 + CONTINENT_COLOR_SEED * 83.17) % 360);
-      const tier = COLOR_TIERS[(c.id + CONTINENT_COLOR_SEED) % COLOR_TIERS.length];
-      const distinctColor = hslToHex(hue, tier.s, tier.l);
+      const distinctColor = continentColor(c.id);
       c.color = distinctColor;
       continentColors.set(c.id, distinctColor);
     });
@@ -162,40 +151,10 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
     adjacency,
     genreMembers,
     genreBySlug,
+    duplicateArtistSlugs: findDuplicateArtistSlugs(bundle.nodes),
     searchIndex: buildSearchIndex(bundle.nodes),
-    genreSearchIndex: buildGenreSearchIndex(genreMembers)
+    genreSearchIndex: buildGenreSearchIndex([...genreMembers].map(([genre, members]) => [genre, members.length]))
   };
-}
-
-/**
- * Parses raw continent detail JSON into normalized ArtistDetail records.
- */
-export function parseContinentDetails(
-  rawChunk: Record<string, any>
-): Record<string, ArtistDetail> {
-  const chunk: Record<string, ArtistDetail> = {};
-
-  for (const [artistId, detail] of Object.entries(rawChunk)) {
-    chunk[artistId] = {
-      ...detail,
-      topCrossovers: Array.isArray(detail.topCrossovers)
-        ? detail.topCrossovers.map((c: any) => {
-            if (Array.isArray(c)) {
-              return {
-                neighborId: c[0],
-                overlapPercent: c[1],
-                sharedPlaylists: c[2],
-                selfPercent: c[3],
-                neighborPercent: c[4]
-              };
-            }
-            return c;
-          })
-        : []
-    };
-  }
-
-  return chunk;
 }
 
 export function useGraphData() {
@@ -208,6 +167,7 @@ export function useGraphData() {
   const [adjacency, setAdjacency] = useState<GraphAdjacency>(EMPTY_ADJACENCY);
   const [genreMembers, setGenreMembers] = useState<Map<string, number[]>>(new Map());
   const [genreBySlug, setGenreBySlug] = useState<Map<string, string>>(new Map());
+  const [duplicateArtistSlugs, setDuplicateArtistSlugs] = useState<Set<string>>(new Set());
   const [searchIndex, setSearchIndex] = useState<IndexedNode[]>([]);
   const [genreSearchIndex, setGenreSearchIndex] = useState<IndexedGenre[]>([]);
   const [detailsMap, setDetailsMap] = useState<Record<string, ArtistDetail>>({});
@@ -279,6 +239,7 @@ export function useGraphData() {
           setAdjacency(processed.adjacency);
           setGenreMembers(processed.genreMembers);
           setGenreBySlug(processed.genreBySlug);
+          setDuplicateArtistSlugs(processed.duplicateArtistSlugs);
           setSearchIndex(processed.searchIndex);
           setGenreSearchIndex(processed.genreSearchIndex);
           setLoading(false);
@@ -308,6 +269,7 @@ export function useGraphData() {
     adjacency,
     genreMembers,
     genreBySlug,
+    duplicateArtistSlugs,
     searchIndex,
     genreSearchIndex,
     detailsMap,

@@ -4,7 +4,7 @@ import { AtlasNode, Continent } from '../types/atlas';
 import { SheetPanel } from './panel/SheetPanel';
 import { useGenreInfo } from '../hooks/useGenreInfo';
 import { filterValidSubgenres, formatSubscriberCount } from '../utils/artistUtils';
-import { findRelatedGenres, formatInception } from '../utils/genreUtils';
+import { findRelatedGenres, formatInception, groupByContinent, hasGenrePage, slugify } from '../utils/genreUtils';
 import { resolveArtistImageUrl, DEFAULT_FALLBACK_AVATAR } from '../utils/imageUtils';
 
 const INITIAL_ARTISTS_SHOWN = 30;
@@ -47,23 +47,10 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
   const [shownCount, setShownCount] = useState(INITIAL_ARTISTS_SHOWN);
   const info = useGenreInfo(genre);
 
-  const continentGroups = useMemo(() => {
-    const byId = new Map(continents.map((c) => [c.id, c]));
-    const groups = new Map<number, number[]>();
-    for (const idx of members) {
-      const cId = nodes[idx].continentId;
-      const list = groups.get(cId);
-      if (list) list.push(idx);
-      else groups.set(cId, [idx]);
-    }
-    return [...groups]
-      .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, MAX_CONTINENTS_SHOWN)
-      .flatMap(([cId, indices]) => {
-        const continent = byId.get(cId);
-        return continent ? [{ continent, indices }] : [];
-      });
-  }, [members, nodes, continents]);
+  const continentGroups = useMemo(
+    () => groupByContinent(members, continents, (idx) => nodes[idx].continentId).slice(0, MAX_CONTINENTS_SHOWN),
+    [members, nodes, continents]
+  );
 
   const relatedGenres = useMemo(
     () =>
@@ -106,6 +93,18 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
               <div className="text-xs text-slate-400 mt-0.5">
                 {members.length.toLocaleString()} artists
                 {info?.since && <> · emerged {formatInception(info.since)}</>}
+                {hasGenrePage(members.length) && (
+                  <>
+                    {' · '}
+                    <a
+                      href={`/genres/${slugify(genre)}/`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-emerald-400 hover:text-emerald-300 underline"
+                    >
+                      Genre page
+                    </a>
+                  </>
+                )}
               </div>
             </div>
             <button
@@ -155,7 +154,7 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
                   Found in
                 </SectionTitle>
                 <div className="flex flex-wrap gap-1.5">
-                  {continentGroups.map(({ continent, indices }) => (
+                  {continentGroups.map(({ continent, members: indices }) => (
                     <button
                       key={continent.id}
                       type="button"

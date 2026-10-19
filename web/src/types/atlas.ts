@@ -15,6 +15,7 @@ export interface ArtistDetail {
   subscribersFormatted?: string;
   previewUrl?: string;
   spotifyUrl?: string;
+  deezerUrl?: string;
   totalPlaylists?: number;
   topCrossovers?: CrossoverNeighbor[];
 }
@@ -37,6 +38,7 @@ export interface AtlasNode {
   subscribersFormatted?: string;
   previewUrl?: string;
   spotifyUrl?: string;
+  deezerUrl?: string;
   totalPlaylists?: number;
   topCrossovers?: CrossoverNeighbor[];
 }

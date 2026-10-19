@@ -27,3 +27,21 @@ export function hslToHex(h: number, sPct: number, lPct: number): string {
   const toHex = (val: number) => Math.round((val + m) * 255).toString(16).padStart(2, '0');
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
 }
+
+// Configurable seed to reroll continent colors deterministically
+const CONTINENT_COLOR_SEED = 46;
+
+// Multi-tier palettes combining soft pastel, deep jewel, radiant, and muted tones
+const COLOR_TIERS = [
+  { s: 55, l: 72 }, // Soft Pastel
+  { s: 84, l: 46 }, // Deep Jewel
+  { s: 75, l: 62 }, // Radiant Warm
+  { s: 58, l: 52 }, // Muted Dusty
+];
+
+/** A continent's map color: golden-angle hues across the palette tiers, so neighbouring ids stay distinct */
+export function continentColor(continentId: number): string {
+  const hue = Math.round((continentId * 137.508 + CONTINENT_COLOR_SEED * 83.17) % 360);
+  const tier = COLOR_TIERS[(continentId + CONTINENT_COLOR_SEED) % COLOR_TIERS.length];
+  return hslToHex(hue, tier.s, tier.l);
+}

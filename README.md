@@ -19,7 +19,8 @@ Every node, connection, genre tag, and metric emerges organically from real-worl
 - **Instant Search (`Ctrl+K` or `/`)**: Global fuzzy search across artists, genres, and continents with smooth camera fly-to animations.
 - **Continent Filter HUD**: Filter the entire galaxy by macro continent with interactive artist counts and color swatches.
 - **Degrees of Separation ("Trace path")**: From an artist's drawer (or the route button in the header), pick a second artist to see the shortest chain of shared-playlist connections between them (ties broken by the strongest links), lit up on the map with a shareable `?from=&to=` link.
-- **Genre Panels**: Open any genre from search or an artist's subgenre tags to see its artists by popularity, the continents they live in, related genres (by shared artists), and, where Wikidata has an exact match, a short description and when it emerged. Shareable via `?genre=<slug>`, with crawlable `/genres/` pages.
+- **Genre Panels**: Open any genre from search or an artist's subgenre tags to see its artists by popularity, the continents they live in, related genres (by shared artists), and, where Wikidata has an exact match, a short description and when it emerged. Shareable via `?genre=<slug>`.
+- **Crawlable Pages**: Static pages generated at build time from the same data: an "Artists like…" page for every artist in at least 30 playlists (`/artist/<slug>/`), a page per genre with at least five artists (`/genres/<slug>/`: where it sits on the map, its strongest pairings and related genres), a paginated A–Z artist index (`/artists/`), and sitemaps for each. Every static page has a header search across all artists and genres; artists without their own page appear with a small arrow that opens them in the atlas.
 - **About & Methodology Modal**: Built-in guide detailing data provenance (EveryNoise, YouTube Music, Deezer), map visual legend (nodes, connections, colors), and issue reporting links to GitHub and email.
 
 

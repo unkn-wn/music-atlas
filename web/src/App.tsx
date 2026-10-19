@@ -9,9 +9,10 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { AboutModal } from './components/AboutModal';
 import { GenrePanel } from './components/GenrePanel';
 import { PathCard } from './components/PathCard';
+import { SiteLinks } from './components/SiteLinks';
 import { Spotlight } from './components/canvas/canvasSelection';
 import { AtlasNode } from './types/atlas';
-import { hydrateArtistDetails } from './utils/artistUtils';
+import { hydrateArtistDetails, hasArtistPage, artistPagePath } from './utils/artistUtils';
 import { findPath, GraphPath } from './utils/graphPath';
 import { slugify } from './utils/genreUtils';
 
@@ -53,6 +54,7 @@ export const App: React.FC = () => {
     adjacency,
     genreMembers,
     genreBySlug,
+    duplicateArtistSlugs,
     searchIndex,
     genreSearchIndex,
     detailsMap,
@@ -110,6 +112,15 @@ export const App: React.FC = () => {
     const base = nodeMap.get(selectedArtistId) || null;
     return hydrateArtistDetails(base, detailsMap[selectedArtistId], nodeMap);
   }, [nodeMap, selectedArtistId, detailsMap]);
+
+  // The selected artist's static page, if they have enough playlist data for one
+  const selectedArtistPagePath = useMemo(
+    () =>
+      selectedArtist && hasArtistPage(selectedArtist.totalPlaylists)
+        ? artistPagePath(selectedArtist, duplicateArtistSlugs)
+        : null,
+    [selectedArtist, duplicateArtistSlugs]
+  );
 
   // Active audio artist merged with details if available
   const mergedAudioArtist = useMemo(() => {
@@ -255,7 +266,7 @@ export const App: React.FC = () => {
     const to = INITIAL_PARAMS.get(TO_PARAM);
     const genre = genreBySlug.get(INITIAL_PARAMS.get(GENRE_PARAM) ?? '');
     const artistId = INITIAL_PARAMS.get(ARTIST_PARAM);
-    if (from && to) handleSetPathEnds(from, to);
+    if (from && nodeMap.has(from)) handleSetPathEnds(from, to);
     else if (genre) handleSelectGenre(genre);
     if (artistId && nodeMap.has(artistId)) handleSelectArtist(artistId, true);
   }, [isCanvasReady, genreBySlug, nodeMap, handleSetPathEnds, handleSelectGenre, handleSelectArtist]);
@@ -344,6 +355,7 @@ export const App: React.FC = () => {
     );
   }
 
+  // Mirrored as static markup in index.html's #root, so keep the two identical
   if (!data) {
     return (
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
@@ -354,6 +366,10 @@ export const App: React.FC = () => {
             Spatializing cosmic artists across EveryNoise community playlists...
           </p>
         </div>
+        <SiteLinks
+          className="flex gap-5 text-sm"
+          linkClassName="text-emerald-400 hover:text-emerald-300 font-semibold"
+        />
       </div>
     );
   }
@@ -403,6 +419,10 @@ export const App: React.FC = () => {
           <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
             MUSIC ATLAS
           </span>
+          <SiteLinks
+            className="hidden lg:flex items-center gap-3 border-l border-white/10 pl-3 text-xs"
+            linkClassName="text-slate-400 hover:text-white font-semibold transition-colors whitespace-nowrap"
+          />
         </div>
 
         {/* Global Search Bar (Expands on Mobile) */}
@@ -608,6 +628,7 @@ export const App: React.FC = () => {
               <ArtistDrawer
                 key={selectedArtist.id}
                 artist={selectedArtist}
+                pagePath={selectedArtistPagePath}
                 onClose={handleCloseArtist}
                 onSelectNeighbor={handleSelectArtistAndFly}
                 onSelectGenre={handleSelectGenre}

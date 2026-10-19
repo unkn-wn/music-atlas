@@ -10,6 +10,8 @@ const PROGRESS_BAR_WHITE_PCT = 45;
 
 interface ArtistDrawerProps {
   artist: AtlasNode | null;
+  /** The artist's static page, when they have one */
+  pagePath: string | null;
   onClose: () => void;
   onSelectNeighbor: (neighborId: string) => void;
   onSelectGenre: (genre: string) => void;
@@ -23,6 +25,7 @@ interface ArtistDrawerProps {
 
 export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
   artist,
+  pagePath,
   onClose,
   onSelectNeighbor,
   onSelectGenre,
@@ -398,6 +401,15 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
                     CLOSEST ARTISTS ({displayedNeighbors.length})
                   </span>
                 </div>
+                {pagePath && (
+                  <a
+                    href={pagePath}
+                    className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline transition-colors"
+                    title={`All artists like ${artist.label} on one page`}
+                  >
+                    Artist page
+                  </a>
+                )}
               </div>
 
               <div className="flex flex-col gap-2">

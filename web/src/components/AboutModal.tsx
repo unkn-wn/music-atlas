@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sparkles, X } from 'lucide-react';
+import { SiteLinks } from './SiteLinks';
 
 interface AboutModalProps {
   isOpen: boolean;
@@ -85,12 +86,10 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           ! Inspired by the Twitch Atlas.
         </p>
 
-        <a
-          href="/artists/"
-          className="block text-center text-xs text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
-        >
-          Browse every artist A–Z
-        </a>
+        <SiteLinks
+          className="flex justify-center gap-4 text-xs"
+          linkClassName="text-emerald-400 hover:text-emerald-300 underline font-medium transition-colors"
+        />
 
         <button
           onClick={onClose}

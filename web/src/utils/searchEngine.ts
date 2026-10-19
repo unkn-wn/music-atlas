@@ -176,13 +176,13 @@ export interface IndexedGenre {
   artistCount: number;
 }
 
-/** Pre-indexes genre names, largest genres first so every priority bucket is size-ranked. */
-export function buildGenreSearchIndex(genreMembers: Map<string, number[]>): IndexedGenre[] {
+/** Pre-indexes genre names (name -> artist count), largest genres first so every priority bucket is size-ranked. */
+export function buildGenreSearchIndex(genres: Iterable<[string, number]>): IndexedGenre[] {
   const list: IndexedGenre[] = [];
-  genreMembers.forEach((members, name) => {
+  for (const [name, artistCount] of genres) {
     const norm = normalizeSearchText(name);
-    list.push({ name, norm, words: norm.split(/[\s\-_/&]+/).filter(Boolean), artistCount: members.length });
-  });
+    list.push({ name, norm, words: norm.split(/[\s\-_/&]+/).filter(Boolean), artistCount });
+  }
   return list.sort((a, b) => b.artistCount - a.artistCount);
 }
 

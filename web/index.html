@@ -18,6 +18,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="referrer" content="no-referrer" />
     <meta name="theme-color" content="#090b10" />
+    <!-- Paints the dark background before any stylesheet or script loads, so navigations don't flash white -->
+    <meta name="color-scheme" content="dark" />
+    <style>html{background:#090b10}</style>
 
     <title>Music Atlas: Interactive Map of %ARTIST_COUNT% Artists &amp; Genres</title>
     <meta name="description" content="Explore %ARTIST_COUNT% artists as a galaxy, connected by real community playlists. Find similar artists and discover new genres." />
@@ -49,14 +52,24 @@
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "Music Atlas",
-        "url": "https://music-atlas.app/",
-        "description": "Explore %ARTIST_COUNT% artists as a galaxy, connected by real community playlists. Find similar artists and discover new genres.",
-        "image": "https://music-atlas.app/og-image.jpg",
-        "applicationCategory": "MultimediaApplication",
-        "operatingSystem": "Any",
-        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "Music Atlas",
+            "alternateName": ["music-atlas.app", "MusicAtlas"],
+            "url": "https://music-atlas.app/"
+          },
+          {
+            "@type": "WebApplication",
+            "name": "Music Atlas",
+            "url": "https://music-atlas.app/",
+            "description": "Explore %ARTIST_COUNT% artists as a galaxy, connected by real community playlists. Find similar artists and discover new genres.",
+            "image": "https://music-atlas.app/og-image.jpg",
+            "applicationCategory": "MultimediaApplication",
+            "operatingSystem": "Any",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+          }
+        ]
       }
     </script>
 
@@ -65,7 +78,20 @@
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
   <body class="bg-[#090b10] text-[#e2e8f0] overflow-hidden antialiased select-none font-sans">
-    <div id="root"></div>
+    <!-- The app's loading screen (App.tsx), shown before the script runs so crawlers and visitors get it at once; React replaces it identically -->
+    <div id="root">
+      <div class="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-10 h-10 text-emerald-400 animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        <div class="text-center px-4">
+          <h2 class="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
+          <p class="text-sm text-slate-400 mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
+        </div>
+        <nav aria-label="Browse" class="flex gap-5 text-sm">
+          <a href="/artists/" class="text-emerald-400 hover:text-emerald-300 font-semibold">Artists A–Z</a>
+          <a href="/genres/" class="text-emerald-400 hover:text-emerald-300 font-semibold">Genres</a>
+        </nav>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

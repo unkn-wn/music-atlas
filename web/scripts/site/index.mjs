@@ -4,7 +4,7 @@
 import { writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CSS, SEARCH_SCRIPT_PLACEHOLDER, fmt } from './layout.mjs';
+import { CSS, SEARCH_SCRIPT_PLACEHOLDER, ANALYTICS_HEAD, HOME_CRUMB, fmt, page } from './layout.mjs';
 import { loadSiteContext } from './context.mjs';
 import { buildArtistPages } from './artist-pages.mjs';
 import { buildGenrePages } from './genre-pages.mjs';
@@ -25,6 +25,21 @@ const buildSite = (ctx) => {
   const files = new Map();
   const html = (path, body) => files.set(path, { type: HTML, body });
   files.set('/artists/style.css', { type: 'text/css; charset=utf-8', body: CSS });
+
+  // Cloudflare Pages answers unknown URLs with this page and a 404 status; without it, every URL returns the app with a 200
+  html(
+    '/404.html',
+    page({
+      path: '/404.html',
+      noindex: true,
+      title: 'Page Not Found',
+      description: 'This page is not on Music Atlas. Search for an artist or genre, or open the map.',
+      crumbs: [HOME_CRUMB, { name: 'Page not found', path: '/404.html' }],
+      body: `<h1>Page not found</h1>
+<p class="lede">Nothing lives at this address. Search for an artist or genre above, or pick up from one of these.</p>
+<div class="actions"><a class="cta inline" href="/">Open the map →</a><a class="cta ghost" href="/artists/">Artists A–Z</a><a class="cta ghost" href="/genres/">Genres</a></div>`,
+    }),
+  );
 
   const { indexPaths, artistPaths } = buildArtistPages(ctx, html);
   const { genreCount, paths: genrePaths, projection } = buildGenrePages(ctx, html);
@@ -68,7 +83,7 @@ export const sitePagesPlugin = () => {
       isBuild = config.command === 'build';
     },
     transformIndexHtml(htmlText) {
-      return htmlText.replaceAll('%ARTIST_COUNT%', roundedCount(loadContext().nodes.length));
+      return htmlText.replace('%ANALYTICS_HEAD%', ANALYTICS_HEAD).replaceAll('%ARTIST_COUNT%', roundedCount(loadContext().nodes.length));
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {

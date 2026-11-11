@@ -54,7 +54,7 @@ export const PathCard: React.FC<PathCardProps> = ({
   }, [copied]);
 
   const copyLink = () => {
-    // The URL already mirrors ?from=&to=
+    // The URL already mirrors #from=&to=
     navigator.clipboard
       ?.writeText(window.location.href)
       .then(() => setCopied(true))

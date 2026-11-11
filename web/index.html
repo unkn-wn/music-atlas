@@ -1,15 +1,7 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-Z7PRHJSN1D"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-
-      gtag('config', 'G-Z7PRHJSN1D');
-    </script>
+    %ANALYTICS_HEAD%
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
@@ -83,9 +75,10 @@
       <div class="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-10 h-10 text-emerald-400 animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
         <div class="text-center px-4">
-          <h2 class="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
+          <h1 class="text-lg font-bold text-white tracking-wide">MUSIC ATLAS</h1>
           <p class="text-sm text-slate-400 mt-1">Spatializing cosmic artists across EveryNoise community playlists...</p>
         </div>
+        <p class="max-w-md px-4 text-center text-sm text-slate-400 leading-relaxed">Music Atlas is an interactive map of the music world, built from real community playlists. Every dot is an artist, and every line joins two artists that listeners put in the same playlists. Search for any artist to find similar ones, follow a genre across the map, or trace the path that connects two artists.</p>
         <nav aria-label="Browse" class="flex gap-5 text-sm">
           <a href="/artists/" class="text-emerald-400 hover:text-emerald-300 font-semibold">Artists A–Z</a>
           <a href="/genres/" class="text-emerald-400 hover:text-emerald-300 font-semibold">Genres</a>

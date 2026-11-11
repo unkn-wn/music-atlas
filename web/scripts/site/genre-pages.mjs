@@ -2,7 +2,8 @@
 // related genres, all computed from the atlas
 import { slugify, findRelatedGenres, formatInception, groupByContinent } from '../../src/utils/genreUtils';
 import { filterValidSubgenres, formatSubscriberCount } from '../../src/utils/artistUtils';
-import { SITE, HOME_CRUMB, esc, fmt, pct, mapHref, page, paginate, paginationNav, pageSuffix } from './layout.mjs';
+import { mapHref } from '../../src/utils/mapLink';
+import { SITE, HOME_CRUMB, esc, fmt, pct, page, fitDescription, paginate, paginationNav, pageSuffix } from './layout.mjs';
 import { PAGE_SIZE, pagePath, letterOf, letterSlug } from './context.mjs';
 import { createProjection, footprintSvg } from './footprint.mjs';
 
@@ -100,8 +101,12 @@ const genrePages = (ctx, genre, members, pairings, projection, html) => {
       path,
       page({
         path,
-        title: i === 0 ? `${genre} Artists & Related Genres | Music Atlas` : `${genre} Artists${suffix} | Music Atlas`,
-        description: `${fmt(members.length)} ${genre} artists, including ${top}, mapped by real community playlists. See where ${genre} sits on the map, its strongest pairings and related genres.${suffix}`,
+        title: i === 0 ? `${genre} Artists & Related Genres` : `${genre} Artists${suffix}`,
+        // Only the first page carries the pairings and related genres
+        description: fitDescription([
+          `${fmt(members.length)} ${genre} artists, including ${top}, mapped by real community playlists${suffix}.`,
+          ...(i === 0 ? ['See its strongest pairings and related genres.'] : []),
+        ]),
         crumbs: [HOME_CRUMB, GENRES_CRUMB, { name: `${genre}${suffix}`, path }],
         jsonLd: [
           {
@@ -118,7 +123,7 @@ const genrePages = (ctx, genre, members, pairings, projection, html) => {
         ],
         body: `<h1>${esc(genre)}${esc(suffix)}</h1>
 ${i === 0 ? aboutSection(info) : ''}
-<div class="actions"><a class="cta inline" href="${esc(mapHref({ genre: slugify(genre) }))}" rel="nofollow">Open ${esc(genre)} on the map →</a></div>
+<div class="actions"><a class="cta inline" href="${esc(mapHref({ genre: slugify(genre) }))}">Open ${esc(genre)} on the map →</a></div>
 ${i === 0 ? overviewSections(ctx, genre, members, related, pairings, projection) : ''}
 <h2 id="artists">Artists${i === 0 ? '' : `, ${fmt(firstRank)}–${fmt(firstRank + list.length - 1)}`}</h2>
 <p class="source">${fmt(members.length)} artists tagged ${esc(genre)}, ranked by listeners.</p>
@@ -147,7 +152,7 @@ export const buildGenrePages = (ctx, html) => {
     '/genres/',
     page({
       path: '/genres/',
-      title: `All ${fmt(names.length)} Genres | Music Atlas`,
+      title: `All ${fmt(names.length)} Genres`,
       description: `Browse ${fmt(names.length)} music genres on Music Atlas, each with its artists, related genres and where it sits on the map of real community playlists.`,
       crumbs: [HOME_CRUMB, GENRES_CRUMB],
       body: `<h1>Every genre on the map</h1>

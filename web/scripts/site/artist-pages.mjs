@@ -1,7 +1,8 @@
 // A–Z artist index (/artists/, paginated letter pages) and a page per artist with enough playlist data
 import { filterValidSubgenres, formatSubscriberCount } from '../../src/utils/artistUtils';
 import { resolveArtistImageUrl } from '../../src/utils/imageUtils';
-import { SITE, HOME_CRUMB, esc, fmt, nameHtml, possessive, mapHref, page, paginate, paginationNav, pageSuffix } from './layout.mjs';
+import { mapHref } from '../../src/utils/mapLink';
+import { SITE, HOME_CRUMB, esc, fmt, nameHtml, possessive, page, fitDescription, paginate, paginationNav, pageSuffix } from './layout.mjs';
 import { PAGE_SIZE, pagePath } from './context.mjs';
 
 const ARTISTS_CRUMB = { name: 'Artists', path: '/artists/' };
@@ -25,7 +26,7 @@ const buildLetterPages = (ctx, html) => {
         path,
         page({
           path,
-          title: `${heading}${suffix} | Music Atlas`,
+          title: `${heading}${suffix}`,
           description: `Browse ${fmt(artists.length)} artists ${letter === '#' ? 'whose names start with a number or non-Latin script' : `starting with ${letter}`} on Music Atlas${suffix}: ${list[0].label} to ${list.at(-1).label}. Select any artist to see their genre neighborhood.`,
           crumbs: [HOME_CRUMB, ARTISTS_CRUMB, { name: `${letter}${suffix}`, path }],
           body: `<h1>${esc(heading)}${esc(suffix)}</h1>
@@ -90,12 +91,15 @@ const artistPage = (ctx, node, path) => {
 <p class="lede">${[node.primaryGenre && esc(node.primaryGenre), `${listeners} listeners`, `in ${fmt(detail.totalPlaylists)} user-made playlists`].filter(Boolean).join(' · ')}${continent ? `<br />Part of the ${esc(continent.name)} community on the map.` : ''}</p>
 </div></div>`;
 
-  const actions = `<div class="actions"><a class="cta inline" href="${esc(mapHref({ artist: node.id }))}" rel="nofollow">Open ${esc(name)} on the map →</a><a class="cta ghost" href="${esc(mapHref({ from: node.id }))}" rel="nofollow">Trace a path from ${esc(name)}</a>${detail.deezerUrl ? `<a class="cta ghost" href="${esc(detail.deezerUrl)}" target="_blank" rel="noopener">Listen on Deezer</a>` : ''}</div>`;
+  const actions = `<div class="actions"><a class="cta inline" href="${esc(mapHref({ artist: node.id }))}">Open ${esc(name)} on the map →</a><a class="cta ghost" href="${esc(mapHref({ from: node.id }))}">Trace a path from ${esc(name)}</a>${detail.deezerUrl ? `<a class="cta ghost" href="${esc(detail.deezerUrl)}" target="_blank" rel="noopener">Listen on Deezer</a>` : ''}</div>`;
 
   return page({
     path,
-    title: `Artists Like ${name}: ${neighbors.length} Similar Artists | Music Atlas`,
-    description: `${neighbors.length} artists similar to ${name}${top3.length ? `, including ${top3.join(', ')}` : ''}, based on ${fmt(detail.totalPlaylists)} real user-made playlists.${genres.length ? ` Genres: ${genres.join(', ')}.` : ''}`,
+    title: `Artists Like ${name}: ${neighbors.length} Similar Artists`,
+    description: fitDescription([
+      `${neighbors.length} artists similar to ${name}${top3.length ? `, including ${top3.join(', ')}` : ''}, based on ${fmt(detail.totalPlaylists)} real user-made playlists.`,
+      ...(genres.length ? [`Genres: ${genres.join(', ')}.`] : []),
+    ]),
     crumbs: [HOME_CRUMB, ARTISTS_CRUMB, { name: crumbLetter.letter, path: crumbLetter.path }, { name, path }],
     ogImage: node.image ? { url: node.image, width: 1000, height: 1000, card: 'summary' } : undefined,
     jsonLd: [
@@ -123,7 +127,7 @@ export const buildArtistPages = (ctx, html) => {
     '/artists/',
     page({
       path: '/artists/',
-      title: `All ${fmt(ctx.nodes.length)} Artists A–Z | Music Atlas`,
+      title: `All ${fmt(ctx.nodes.length)} Artists A–Z`,
       description: `Browse all ${fmt(ctx.nodes.length)} artists on Music Atlas, mapped by genre and real community playlists. Pick any artist to see who they share playlists with.`,
       crumbs: [HOME_CRUMB, ARTISTS_CRUMB],
       body: `<h1>Every artist on the map</h1>

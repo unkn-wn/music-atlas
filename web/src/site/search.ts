@@ -2,6 +2,7 @@
 // The index (/search-index.json, written by scripts/site/) is fetched on first focus.
 import { AtlasNode } from '../types/atlas';
 import { buildSearchIndex, buildGenreSearchIndex, searchArtists, searchGenres, IndexedNode, IndexedGenre } from '../utils/searchEngine';
+import { mapHref } from '../utils/mapLink';
 import { MAP_LINK_SVG } from './icons';
 
 /** Artists most popular first: [name, Deezer node id, page path or 0, primary genre]; genres: [name, page path, artist count] */
@@ -57,14 +58,14 @@ const el = (tag: string, className: string, text?: string) => {
   return node;
 };
 
-const row = (name: string, detail: string, href: string | null, mapHref?: string) => {
+const row = (name: string, detail: string, href: string | null, mapUrl?: string) => {
   const item = el('li', 'result');
   const main = href ? Object.assign(el('a', 'result-name'), { href }) : el('strong', 'result-name plain');
   main.append(name);
   if (detail) main.append(el('small', '', detail));
   item.append(main);
-  if (mapHref) {
-    const pin = Object.assign(el('a', 'maplink'), { href: mapHref, rel: 'nofollow', title: 'View on the map' });
+  if (mapUrl) {
+    const pin = Object.assign(el('a', 'maplink'), { href: mapUrl, title: 'View on the map' });
     pin.setAttribute('aria-label', `View ${name} on the map`);
     pin.innerHTML = MAP_LINK_SVG;
     item.append(pin);
@@ -85,7 +86,7 @@ const render = (index: LoadedIndex, query: string) => {
   }
   for (const artist of searchArtists(index.artists, query, ARTIST_RESULTS)) {
     const path = index.pathOf.get(artist.id) ?? null;
-    list.append(row(artist.label, artist.primaryGenre, path, path ? undefined : `/?artist=${encodeURIComponent(artist.id)}`));
+    list.append(row(artist.label, artist.primaryGenre, path, path ? undefined : mapHref({ artist: artist.id })));
   }
   results.append(list.childElementCount ? list : el('p', 'result-empty', 'No artists or genres match.'));
   results.hidden = false;

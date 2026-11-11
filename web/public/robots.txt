@@ -1,4 +1,8 @@
 User-agent: *
 Allow: /
+# The map's former query-string deep links; its views now live in the URL fragment
+Disallow: /?artist=
+Disallow: /?from=
+Disallow: /?genre=
 
 Sitemap: https://music-atlas.app/sitemap.xml

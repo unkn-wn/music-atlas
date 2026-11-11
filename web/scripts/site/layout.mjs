@@ -1,10 +1,19 @@
 // Shared HTML shell, styles and formatting helpers for the static pages
 import { MAP_LINK_SVG } from '../../src/site/icons';
+import { mapHref } from '../../src/utils/mapLink';
 
 export const SITE = 'https://music-atlas.app';
 /** Replaced with the bundled search script's URL when pages are served or written */
 export const SEARCH_SCRIPT_PLACEHOLDER = '%SITE_SEARCH_SRC%';
+const GA_ID = 'G-Z7PRHJSN1D';
+/** The Google Analytics tag: in every static page's head, and index.html's through its %ANALYTICS_HEAD% placeholder */
+export const ANALYTICS_HEAD = `<script async src="https://www.googletagmanager.com/gtag/js?id=${GA_ID}"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');</script>`;
 const PAGE_WINDOW = 2;
+const BRAND_SUFFIX = ' | Music Atlas';
+// What a search result shows before cutting the text off
+const MAX_TITLE = 60;
+const MAX_DESCRIPTION = 160;
 const DEFAULT_OG_IMAGE = { url: `${SITE}/og-image.jpg`, width: 1200, height: 630, card: 'summary_large_image' };
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -15,10 +24,9 @@ export const nameHtml = (name) => `<bdi>${esc(name)}</bdi>`;
 export const possessive = (name) => `${nameHtml(name)}${/s$/i.test(name) ? "'" : "'s"}`;
 export const pct = (part, whole) => `${Math.round((100 * part) / whole)}%`;
 
-/** Opens an artist (or anything else) in the atlas; nofollow so crawlers don't queue every deep link to the homepage */
-export const mapHref = (params) => `/?${new URLSearchParams(params)}`;
+/** A small arrow that opens the artist on the map */
 export const mapLink = (node) =>
-  `<a class="maplink" href="${esc(mapHref({ artist: node.id }))}" rel="nofollow" title="View on the map" aria-label="View ${esc(node.label)} on the map">${MAP_LINK_SVG}</a>`;
+  `<a class="maplink" href="${esc(mapHref({ artist: node.id }))}" title="View on the map" aria-label="View ${esc(node.label)} on the map">${MAP_LINK_SVG}</a>`;
 
 // "<" escaped so a name can never close the script element
 const jsonLdScript = (graph) =>
@@ -34,18 +42,33 @@ const breadcrumbNav = (crumbs) =>
     .map((c, i) => (i === crumbs.length - 1 ? `<li aria-current="page">${esc(c.name)}</li>` : `<li><a href="${c.path}">${esc(c.name)}</a></li>`))
     .join('')}</ol></nav>`;
 
+/** The sentences, in order, up to the first that would push the description past a search result's snippet; always the first */
+export const fitDescription = (sentences) => {
+  let text = sentences[0];
+  for (const sentence of sentences.slice(1)) {
+    if (text.length + 1 + sentence.length > MAX_DESCRIPTION) break;
+    text += ` ${sentence}`;
+  }
+  return text;
+};
+
+// The site name follows the title only where the whole still fits a search result's title line
+const brandTitle = (title) => (title.length + BRAND_SUFFIX.length <= MAX_TITLE ? `${title}${BRAND_SUFFIX}` : title);
+
 /**
- * A full page. `crumbs` ([{ name, path }], Home first, this page last) renders the visible trail and its
- * BreadcrumbList; `jsonLd` adds more schema.org nodes; `ogImage` overrides the site's share image.
+ * A full page. `title` is the page's own (the site name is appended here); `crumbs` ([{ name, path }], Home first, this page last) renders the visible trail and its
+ * BreadcrumbList; `jsonLd` adds more schema.org nodes; `ogImage` overrides the site's share image; `noindex`
+ * keeps the page out of search results (and drops its canonical).
  */
-export const page = ({ path, title, description, body, crumbs, jsonLd = [], ogImage = DEFAULT_OG_IMAGE }) => `<!doctype html>
+export const page = ({ path, title, description, body, crumbs, jsonLd = [], ogImage = DEFAULT_OG_IMAGE, noindex = false }) => `<!doctype html>
 <html lang="en">
 <head>
+${ANALYTICS_HEAD}
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>${esc(title)}</title>
+<title>${esc(brandTitle(title))}</title>
 <meta name="description" content="${esc(description)}" />
-<link rel="canonical" href="${SITE}${path}" />
+${noindex ? '<meta name="robots" content="noindex" />' : `<link rel="canonical" href="${SITE}${path}" />`}
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <meta name="theme-color" content="#090b10" />
@@ -54,7 +77,7 @@ export const page = ({ path, title, description, body, crumbs, jsonLd = [], ogIm
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Music Atlas" />
 <meta property="og:url" content="${SITE}${path}" />
-<meta property="og:title" content="${esc(title)}" />
+<meta property="og:title" content="${esc(brandTitle(title))}" />
 <meta property="og:description" content="${esc(description)}" />
 <meta property="og:image" content="${esc(ogImage.url)}" />
 <meta property="og:image:width" content="${ogImage.width}" />

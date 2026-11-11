@@ -15,6 +15,7 @@ import { AtlasNode } from './types/atlas';
 import { hydrateArtistDetails, hasArtistPage, artistPagePath } from './utils/artistUtils';
 import { findPath, GraphPath } from './utils/graphPath';
 import { slugify } from './utils/genreUtils';
+import { readMapParams } from './utils/mapLink';
 
 const STORAGE_KEY_SEEN_ABOUT = 'music_atlas_has_seen_about';
 const ARTIST_PARAM = 'artist';
@@ -22,8 +23,8 @@ const GENRE_PARAM = 'genre';
 const FROM_PARAM = 'from';
 const TO_PARAM = 'to';
 
-// View requested via deep link (e.g. from the /artists/ and /genres/ indexes or a shared path), read once at load
-const INITIAL_PARAMS = new URLSearchParams(window.location.search);
+// Whether the page was opened on a deep-linked view (e.g. from an artist or genre page, or a shared path)
+const INITIAL_PARAMS = readMapParams();
 const HAS_DEEP_LINK = [ARTIST_PARAM, GENRE_PARAM, FROM_PARAM].some((key) => INITIAL_PARAMS.has(key));
 
 /** The open path panel: either end may still be unpicked */
@@ -257,34 +258,42 @@ export const App: React.FC = () => {
     setIsCanvasReady(true);
   }, []);
 
-  // Apply the deep-linked view once the canvas can navigate: a path or genre first, then the artist on top
-  const hasAppliedDeepLinkRef = useRef(false);
-  useEffect(() => {
-    if (!isCanvasReady || hasAppliedDeepLinkRef.current) return;
-    hasAppliedDeepLinkRef.current = true;
-    const from = INITIAL_PARAMS.get(FROM_PARAM);
-    const to = INITIAL_PARAMS.get(TO_PARAM);
-    const genre = genreBySlug.get(INITIAL_PARAMS.get(GENRE_PARAM) ?? '');
-    const artistId = INITIAL_PARAMS.get(ARTIST_PARAM);
-    if (from && nodeMap.has(from)) handleSetPathEnds(from, to);
+  // The view the URL asks for: a path or genre first, then the artist on top
+  const applyDeepLink = () => {
+    const params = readMapParams();
+    const from = params.get(FROM_PARAM);
+    const genre = genreBySlug.get(params.get(GENRE_PARAM) ?? '');
+    const artistId = params.get(ARTIST_PARAM);
+    if (from && nodeMap.has(from)) handleSetPathEnds(from, params.get(TO_PARAM));
     else if (genre) handleSelectGenre(genre);
     if (artistId && nodeMap.has(artistId)) handleSelectArtist(artistId, true);
-  }, [isCanvasReady, genreBySlug, nodeMap, handleSetPathEnds, handleSelectGenre, handleSelectArtist]);
+  };
+  const applyDeepLinkRef = useRef(applyDeepLink);
+  applyDeepLinkRef.current = applyDeepLink;
+
+  // Apply it once the canvas can navigate, and again when a deep link is opened in the already-loaded map
+  // (that only changes the fragment, so the page doesn't reload)
+  useEffect(() => {
+    if (!isCanvasReady) return;
+    const apply = () => applyDeepLinkRef.current();
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, [isCanvasReady]);
 
   // Mirror the current view into the URL so it is shareable
   useEffect(() => {
     if (!isCanvasReady) return;
-    const url = new URL(window.location.href);
+    const view = new URLSearchParams();
     const params: [string, string | null][] = [
       [ARTIST_PARAM, selectedArtistId],
       [GENRE_PARAM, selectedGenre ? slugify(selectedGenre) : null],
       [FROM_PARAM, activePath?.fromId ?? null],
       [TO_PARAM, activePath?.toId ?? null]
     ];
-    for (const [key, value] of params) {
-      if (value) url.searchParams.set(key, value);
-      else url.searchParams.delete(key);
-    }
+    for (const [key, value] of params) if (value) view.set(key, value);
+    const url = new URL(window.location.href);
+    url.hash = view.toString();
     window.history.replaceState(null, '', url);
   }, [isCanvasReady, selectedArtistId, selectedGenre, activePath]);
 
@@ -361,11 +370,16 @@ export const App: React.FC = () => {
       <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#07090e] gap-4">
         <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
         <div className="text-center px-4">
-          <h2 className="text-lg font-bold text-white tracking-wide">INITIALIZING MUSIC ATLAS</h2>
+          <h1 className="text-lg font-bold text-white tracking-wide">MUSIC ATLAS</h1>
           <p className="text-sm text-slate-400 mt-1">
             Spatializing cosmic artists across EveryNoise community playlists...
           </p>
         </div>
+        <p className="max-w-md px-4 text-center text-sm text-slate-400 leading-relaxed">
+          Music Atlas is an interactive map of the music world, built from real community playlists. Every dot is
+          an artist, and every line joins two artists that listeners put in the same playlists. Search for any
+          artist to find similar ones, follow a genre across the map, or trace the path that connects two artists.
+        </p>
         <SiteLinks
           className="flex gap-5 text-sm"
           linkClassName="text-emerald-400 hover:text-emerald-300 font-semibold"
@@ -416,9 +430,9 @@ export const App: React.FC = () => {
         {/* Brand Logo & Stats */}
         <div className="glass-panel rounded-full h-10 w-10 sm:w-auto p-0 sm:px-4 flex items-center justify-center sm:justify-start gap-2.5 shadow-xl pointer-events-auto shrink-0 border border-white/10 bg-[#07090e]/85 backdrop-blur-xl">
           <img src="/favicon.svg" alt="" className="w-6 h-6 shrink-0" />
-          <span className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
+          <h1 className="hidden sm:inline-block font-extrabold text-xs sm:text-sm tracking-wider text-white whitespace-nowrap pr-1">
             MUSIC ATLAS
-          </span>
+          </h1>
           <SiteLinks
             className="hidden lg:flex items-center gap-3 border-l border-white/10 pl-3 text-xs"
             linkClassName="text-slate-400 hover:text-white font-semibold transition-colors whitespace-nowrap"

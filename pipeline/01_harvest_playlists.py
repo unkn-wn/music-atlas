@@ -3,12 +3,17 @@ Stage 1: Authentic Multi-Subgenre Community Playlist Harvesting.
 Harvests public user-created playlists from YouTube Music across all EveryNoise subgenres equally.
 Implements:
 1. Equal Analysis Across All Subgenres: No hardcoded artists, promo keyword overrides, or subgenre favoritism.
-2. Two-Phase Harvesting:
+2. Three-Phase Harvesting (playlists are fetched concurrently, accepted one by one in a fixed order):
    - Phase 1 (search): "{genre} playlist", "{genre} mix", "best of {genre}", "{genre} songs" via filter="community_playlists",
      ranked by a consensus coherence gate (up to --tier1-limit per genre). Runs for every genre first.
    - Phase 2 (recommended): "Recommended playlists" shelves of verified anchor songs. Equal budget per genre:
      search playlists + playlists found through its anchors stop at --target-playlists.
      Uses an unauthenticated client, so shelves are never personalized to an account.
+   - Phase 3 (related): "Related playlists" of verified anchor playlists, one hop, same number of anchors per genre.
+     An anchor is one of the genre's own search playlists whose artists, judged without that playlist, clearly
+     belong to the genre. A genre without such a playlist is not expanded (there is no fallback).
+     A related playlist never inherits the genre: it is labeled only if its own artists clearly belong to it
+     (each artist has one vote, split across the genres it is core to), otherwise it stays unlabeled.
 3. Verified Anchors & Content Labels (Phase 2), judged only against Phase 1 search results:
    - Anchor artist appears in >= 2 playlists whose human-written title contains the genre name (all search playlists
      if the genre has fewer than 2 such titles), and the genre is one of the artist's strongest homes.
@@ -41,6 +46,8 @@ import random
 import hashlib
 import argparse
 import unicodedata
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Tuple, Any, Set
 
@@ -82,6 +89,9 @@ CHECKPOINT_INTERVAL_SEC = 600
 ANCHOR_HOME_RATIO = 0.5       # anchor's share of this genre's playlists >= half its share in its strongest genre
 REC_MIN_COHERENCE = 0.3       # recommended playlist label: share of its artists that are core artists of the genre
 REC_RELATIVE_COHERENCE = 0.5  # ...and the seed genre must reach half the share of the best-matching genre
+RELATED_MIN_SCORE = 0.15      # related anchor / label: share of the playlist's artist votes that go to the genre
+RELATED_MARGIN = 1.5          # ...and the genre must beat every other genre by this factor
+RELATED_MIN_ARTISTS = 5       # fewer artists cannot say anything reliable about a genre
 
 class PlaylistDeduper:
     """
@@ -380,13 +390,18 @@ class GenreEvidence:
         self.named_counts: Dict[str, Counter] = defaultdict(Counter)  # genre -> artist -> named playlists
         self.songs: Dict[str, Counter] = defaultdict(Counter)         # genre -> (artist, videoId) -> playlists
         self.named_songs: Dict[str, Counter] = defaultdict(Counter)   # genre -> (artist, videoId) -> named playlists
+        self.artist_genres: Dict[str, Counter] = defaultdict(Counter) # artist -> genre -> playlists
+        self.members: Dict[str, List[Tuple[bool, str, Set[str]]]] = defaultdict(list)  # genre -> (named, id, artists)
         for p in playlists:
             genre = p["genre"]
             named = normalize_title(genre) in normalize_title(p.get("title", ""))
             self.size[genre] += 1
             self.named_size[genre] += named
-            for a in playlist_artists(p):
+            artists = playlist_artists(p)
+            self.members[genre].append((named, p["id"], artists))
+            for a in artists:
                 self.counts[genre][a] += 1
+                self.artist_genres[a][genre] += 1
                 if named:
                     self.named_counts[genre][a] += 1
             for song in {(t["artist_name"].lower().strip(), t["videoId"]) for t in p["tracks"]
@@ -437,10 +452,44 @@ class GenreEvidence:
             return seed_genre
         return best_genre if best / n >= REC_MIN_COHERENCE else ""
 
-def load_checkpoint(deduper: PlaylistDeduper) -> Tuple[List[Dict], Counter, Set[str], Set[str], Set[str]]:
+    def belongs(self, artists: Set[str], genre: str, own: bool = False) -> float:
+        """
+        Share of a playlist's artist votes that go to `genre`, or 0.0 unless the genre is its clear best match.
+        Every artist has one vote, split across the genres it is core to in proportion to its share of each genre's
+        playlists: an artist spread over dozens of genres says little about any of them, so famous crossover
+        artists cannot pull a playlist into a small genre.
+        own=True judges one of the genre's own search playlists as if it had not been harvested.
+        """
+        if len(artists) < RELATED_MIN_ARTISTS:
+            return 0.0
+        votes = Counter()
+        for a in artists:
+            shares = {}
+            for g, n in self.artist_genres.get(a, {}).items():
+                size = self.size[g]
+                if own and g == genre:
+                    n, size = n - 1, size - 1
+                if n >= 2:
+                    shares[g] = n / size
+            total = sum(shares.values())
+            for g, s in shares.items():
+                votes[g] += s / total
+        score = votes[genre] / len(artists)
+        rival = max((v for g, v in votes.items() if g != genre), default=0.0) / len(artists)
+        return score if score >= RELATED_MIN_SCORE and score >= RELATED_MARGIN * rival else 0.0
+
+    def related_anchors(self, genre: str, k: int) -> List[str]:
+        """
+        Verified anchor playlists of a genre: its own search playlists that clearly belong to it when judged
+        without themselves. Titles naming the genre first, then the strongest content match, then ID.
+        """
+        scored = [(not named, -self.belongs(artists, genre, own=True), pid) for named, pid, artists in self.members[genre]]
+        return [pid for _, score, pid in sorted(scored) if score < 0][:k]
+
+def load_checkpoint(deduper: PlaylistDeduper) -> Tuple[List[Dict], Counter, Set[str], Set[str], Set[str], Set[str]]:
     """Loads existing harvesting state, sanitizing against algorithmic and copied/duplicate playlists."""
     if not os.path.exists(STATE_FILE) or not os.path.exists(PLAYLISTS_FILE):
-        return [], Counter(), set(), set(), set()
+        return [], Counter(), set(), set(), set(), set()
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -493,20 +542,22 @@ def load_checkpoint(deduper: PlaylistDeduper) -> Tuple[List[Dict], Counter, Set[
         seen_authors.pop("Community Curator", None)
         searched = set(state.get("searched_genres", []))
         expanded = set(state.get("expanded_genres", []))
+        related = set(state.get("related_genres", []))
         rejected = set(state.get("rejected_ids", []))
-        print(f"Resuming from checkpoint: {len(searched)} genres searched, {len(expanded)} expanded, {len(valid_playlists)} valid community playlists retained ({duplicates_dropped} copied/duplicate playlists dropped).")
-        return valid_playlists, seen_authors, searched, expanded, rejected
+        print(f"Resuming from checkpoint: {len(searched)} genres searched, {len(expanded)} expanded, {len(related)} related-expanded, {len(valid_playlists)} valid community playlists retained ({duplicates_dropped} copied/duplicate playlists dropped).")
+        return valid_playlists, seen_authors, searched, expanded, related, rejected
     except Exception as e:
         print(f"Checkpoint corrupted ({e}), starting fresh.")
-        return [], Counter(), set(), set(), set()
+        return [], Counter(), set(), set(), set(), set()
 
-def save_checkpoint(playlists: List[Dict], seen_authors: Counter, searched: Set[str], expanded: Set[str], rejected: Set[str]):
+def save_checkpoint(playlists: List[Dict], seen_authors: Counter, searched: Set[str], expanded: Set[str], related: Set[str], rejected: Set[str]):
     """Atomically saves the harvesting state."""
     state = {
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "playlistsCount": len(playlists),
         "searched_genres": sorted(searched),
         "expanded_genres": sorted(expanded),
+        "related_genres": sorted(related),
         "seen_authors": dict(seen_authors),
         "rejected_ids": sorted(rejected)
     }
@@ -521,12 +572,15 @@ def save_checkpoint(playlists: List[Dict], seen_authors: Counter, searched: Set[
     os.replace(temp_pl, PLAYLISTS_FILE)
 
 class Harvester:
-    """Rate-limited YouTube Music client plus the shared acceptance state (curator cap, dedupe, IDs)."""
+    """
+    YouTube Music access plus the shared acceptance state (curator cap, dedupe, IDs).
+    Playlists are fetched concurrently; they are validated and accepted one by one in a fixed order,
+    so the harvest does not depend on which request happens to finish first.
+    """
 
-    def __init__(self, rate_limit: float, playlists: List[Dict], seen_authors: Counter, deduper: PlaylistDeduper, rejected: Set[str]):
-        self.yt = YTMusic()  # unauthenticated: results are never personalized to an account
-        self.min_interval = 1.0 / max(0.5, rate_limit)
-        self.last_req_time = 0.0
+    def __init__(self, workers: int, playlists: List[Dict], seen_authors: Counter, deduper: PlaylistDeduper, rejected: Set[str]):
+        self.local = threading.local()  # one unauthenticated client per thread: results are never personalized
+        self.pool = ThreadPoolExecutor(max_workers=workers)
         self.playlists = playlists
         self.seen_authors = seen_authors
         self.deduper = deduper
@@ -537,16 +591,13 @@ class Harvester:
         # Playlists that failed genre-independent validation; never re-fetched for later genres or runs
         self.rejected = rejected
 
-    def call(self, fn, *args, **kwargs):
-        """Paced API call: long exponential backoff on rate limits, one quick retry on other transient errors."""
+    def call(self, method: str, *args, **kwargs):
+        """API call: long exponential backoff on rate limits, one quick retry on other transient errors."""
+        if not hasattr(self.local, "yt"):
+            self.local.yt = YTMusic()
         for attempt in range(3):
-            elapsed = time.time() - self.last_req_time
-            needed = self.min_interval + random.uniform(0.1, 0.25) - elapsed
-            if needed > 0:
-                time.sleep(needed)
-            self.last_req_time = time.time()
             try:
-                return fn(*args, **kwargs)
+                return getattr(self.local.yt, method)(*args, **kwargs)
             except Exception as e:
                 err = str(e).lower()
                 if "429" in err or "quota" in err or "rate" in err:
@@ -558,16 +609,15 @@ class Harvester:
                     time.sleep(1.0)
         return None
 
-    def screen(self, bid: str, genre: str, author_hint: Any = None) -> Optional[Tuple[Dict, Set[str], str]]:
-        """Fetches and validates a playlist (curator cap, filters, copy guard). Genre relevance is checked by callers."""
-        if bid in self.playlist_ids or bid in self.rejected:
-            return None
-        if author_hint is not None:
-            _, author_id = parse_author(author_hint, bid)
-            if self.seen_authors[author_id] >= 2:
-                return None
-        raw = self.call(self.yt.get_playlist, bid, limit=150)
-        if not raw:
+    def fetch(self, bids: List[str]) -> Dict[str, Dict]:
+        """Concurrently fetches the playlists that are neither harvested nor rejected yet."""
+        todo = [b for b in dict.fromkeys(bids) if b not in self.playlist_ids and b not in self.rejected]
+        raws = self.pool.map(lambda b: self.call("get_playlist", b, limit=150), todo)
+        return {b: raw for b, raw in zip(todo, raws) if raw}
+
+    def screen(self, bid: str, genre: str, raw: Optional[Dict], author_hint: Any = None) -> Optional[Tuple[Dict, Set[str], str]]:
+        """Validates a fetched playlist (curator cap, filters, copy guard). Genre relevance is checked by callers."""
+        if not raw or bid in self.playlist_ids or bid in self.rejected:
             return None
         author_name, author_id = parse_author(author_hint if author_hint is not None else raw.get("author"), bid)
         if self.seen_authors[author_id] >= 2:
@@ -604,18 +654,21 @@ class Harvester:
         for q in queries:
             if len(candidates) >= 35:
                 break
-            for item in self.call(self.yt.search, q, filter="community_playlists", limit=20) or []:
+            for item in self.call("search", q, filter="community_playlists", limit=20) or []:
                 bid = item.get("browseId")
                 if bid and bid not in seen_cand_ids and bid not in self.playlist_ids:
                     candidates.append(item)
                     seen_cand_ids.add(bid)
 
+        # Curators already at the cap are not worth a request
+        candidates = [c for c in candidates if self.seen_authors[parse_author(c.get("author") or {}, c["browseId"])[1]] < 2]
+        raws = self.fetch([c["browseId"] for c in candidates])
         pool = []
         pool_deduper = PlaylistDeduper()
         for cand in candidates:
             if len(pool) >= 30:
                 break
-            screened = self.screen(cand["browseId"], genre, cand.get("author") or {})
+            screened = self.screen(cand["browseId"], genre, raws.get(cand["browseId"]), cand.get("author") or {})
             if not screened:
                 continue
             pl, track_ids, author_id = screened
@@ -644,12 +697,12 @@ class Harvester:
 
     def recommended_playlist_ids(self, video_id: str) -> List[str]:
         """User playlists on a song's 'Recommended playlists' shelf (PL IDs only: no albums or YouTube mixes)."""
-        watch = self.call(self.yt.get_watch_playlist, videoId=video_id, limit=5)
+        watch = self.call("get_watch_playlist", videoId=video_id, limit=5)
         token = (watch or {}).get("related")
         if not token:
             return []
         ids = []
-        for shelf in self.call(self.yt.get_song_related, token) or []:
+        for shelf in self.call("get_song_related", token) or []:
             if not isinstance(shelf, dict) or "playlist" not in (shelf.get("title") or "").lower():
                 continue
             for item in shelf.get("contents") or []:
@@ -670,13 +723,13 @@ class Harvester:
         for _, video_id in evidence.anchors(genre, max_anchors):
             if budget <= 0:
                 return
-            for bid in self.recommended_playlist_ids(video_id):
+            shelf = [bid for bid in self.recommended_playlist_ids(video_id) if bid not in tried]
+            tried.update(shelf)
+            raws = self.fetch(shelf)
+            for bid in shelf:
                 if budget <= 0:
                     return
-                if bid in tried:
-                    continue
-                tried.add(bid)
-                screened = self.screen(bid, genre)
+                screened = self.screen(bid, genre, raws.get(bid))
                 if not screened:
                     continue
                 pl, track_ids, author_id = screened
@@ -686,13 +739,37 @@ class Harvester:
                 self.seeded[genre] += 1
                 budget -= 1
 
+    def related_genre(self, genre: str, evidence: GenreEvidence, max_anchors: int):
+        """
+        Phase 3: playlists related to the genre's verified anchor playlists (one hop; related playlists are never
+        used as anchors themselves). Every valid playlist is kept as co-occurrence evidence. It carries the genre
+        only if its own artists clearly belong to it, and records its anchor so that stage 2 counts one anchor's
+        neighbourhood as a single independent appearance.
+        """
+        for anchor_id in evidence.related_anchors(genre, max_anchors):
+            anchor = self.call("get_playlist", anchor_id, limit=1, related=True) or {}
+            ids = [canonical_playlist_id(pid) for pid in
+                   ((item.get("playlistId") or "") for item in anchor.get("related") or [] if isinstance(item, dict)) if pid]
+            ids = [pid for pid in ids if pid.startswith("VLPL")]  # user playlists only: no YouTube mixes
+            raws = self.fetch(ids)
+            for bid in ids:
+                screened = self.screen(bid, genre, raws.get(bid))
+                if not screened:
+                    continue
+                pl, track_ids, author_id = screened
+                pl["genre"] = genre if evidence.belongs(playlist_artists(pl), genre) else ""
+                pl["seed_genre"] = genre
+                pl["anchor_id"] = anchor_id
+                self.accept(pl, track_ids, author_id, "related")
+
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Authentic Multi-Subgenre Community Playlist Harvesting.")
     parser.add_argument("--limit-genres", type=int, default=None, help="Limit number of genres to crawl")
     parser.add_argument("--target-playlists", type=int, default=20, help="Target qualifying playlists per genre (default: 20)")
     parser.add_argument("--tier1-limit", type=int, default=20, help="Max playlists from direct search (default: 20)")
     parser.add_argument("--max-anchors", type=int, default=8, help="Max verified anchor songs per genre for recommendation discovery (default: 8)")
-    parser.add_argument("--rate-limit", type=float, default=3.0, help="Max requests per second for YTM (default: 3.0)")
+    parser.add_argument("--related-anchors", type=int, default=3, help="Verified anchor playlists per genre for related-playlist discovery (default: 3)")
+    parser.add_argument("--workers", type=int, default=8, help="Concurrent playlist fetches (default: 8)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh without loading existing checkpoint")
     parser.add_argument("--reverse", action="store_true", help="Process genres in reverse rank order (niche/underground genres first)")
     parser.add_argument("--revisit", action="store_true", help="Re-run both phases for checkpointed genres still below --target-playlists")
@@ -717,13 +794,14 @@ def main():
     print(f" Target: {args.target_playlists} qualifying community playlists per subgenre")
     print(f" Phase 1: Name search (up to {search_limit}) for every genre")
     print(f" Phase 2: Recommended playlists of verified anchor songs, filling up to {args.target_playlists}")
+    print(f" Phase 3: Related playlists of up to {args.related_anchors} verified anchor playlists per genre")
     print(f" Equal Analysis: Every subgenre processed through identical quality pipeline")
     print("=" * 70)
     start_time = time.time()
 
     deduper = PlaylistDeduper()
     if args.fresh:
-        playlists, seen_authors, searched, expanded, rejected = [], Counter(), set(), set(), set()
+        playlists, seen_authors, searched, expanded, related, rejected = [], Counter(), set(), set(), set(), set()
         for fpath in [STATE_FILE, PLAYLISTS_FILE]:
             if os.path.exists(fpath):
                 try:
@@ -732,22 +810,23 @@ def main():
                     pass
         print("Fresh run requested: Cleared previous checkpoints.")
     else:
-        playlists, seen_authors, searched, expanded, rejected = load_checkpoint(deduper)
+        playlists, seen_authors, searched, expanded, related, rejected = load_checkpoint(deduper)
 
-    harvester = Harvester(args.rate_limit, playlists, seen_authors, deduper, rejected)
+    harvester = Harvester(args.workers, playlists, seen_authors, deduper, rejected)
     if args.revisit:
         # Same criterion for every genre: search playlists plus recommended playlists found through it
         found = Counter(p["genre"] for p in playlists if p["source"] == "search") + harvester.seeded
         under = {g["genre"] for g in genres_data if found[g["genre"]] < args.target_playlists}
         searched -= under
         expanded -= under
+        related -= under
         print(f"Revisit: {len(under)} genres below {args.target_playlists} playlists queued again.")
     last_checkpoint_time = time.time()
 
     def maybe_checkpoint():
         nonlocal last_checkpoint_time
         if time.time() - last_checkpoint_time >= CHECKPOINT_INTERVAL_SEC:
-            save_checkpoint(playlists, seen_authors, searched, expanded, rejected)
+            save_checkpoint(playlists, seen_authors, searched, expanded, related, rejected)
             last_checkpoint_time = time.time()
 
     pbar = tqdm(genres_data, desc="Phase 1 (search)", unit="genre")
@@ -773,12 +852,22 @@ def main():
         expanded.add(genre)
         maybe_checkpoint()
 
+    pbar = tqdm(genres_data, desc="Phase 3 (related)", unit="genre")
+    for g_info in pbar:
+        genre = g_info["genre"]
+        if genre in related:
+            continue
+        pbar.set_postfix({"genre": genre[:16], "total_pl": len(playlists)})
+        harvester.related_genre(genre, evidence, args.related_anchors)
+        related.add(genre)
+        maybe_checkpoint()
+
     print(f"Title-derived artist credits revised: {verify_title_credits(playlists)}")
-    save_checkpoint(playlists, seen_authors, searched, expanded, rejected)
+    save_checkpoint(playlists, seen_authors, searched, expanded, related, rejected)
     sources = Counter(p["source"] for p in playlists)
     print(f"\nStage 1 completed in {time.time() - start_time:.2f}s!")
     unlabeled = sum(1 for p in playlists if not p["genre"])
-    print(f"Total surviving authentic playlists: {len(playlists)} (search {sources['search']}, recommended {sources['recommended']}, unlabeled {unlabeled})")
+    print(f"Total surviving authentic playlists: {len(playlists)} (search {sources['search']}, recommended {sources['recommended']}, related {sources['related']}, unlabeled {unlabeled})")
     print("=" * 70)
 
 if __name__ == "__main__":

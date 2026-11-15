@@ -56,8 +56,8 @@ The entire universe is built on **one cardinal rule**:
 The pipeline consists of clean, decoupled stages in `pipeline/`:
 
 1. `00_harvest_genres.py`: Ingests popularity-ranked genre taxonomy from EveryNoise (names and ranks only; zero Spotify embeds).
-2. `01_harvest_playlists.py`: Harvests 20+ user-created community playlists per subgenre via YouTube Music public searches. Applies strict Unicode sanitization, anti-discography filters, and curator caps.
-3. `02_enrich_artists.py`: Filters artists by $c_i \ge 4$, computes IDF-weighted Top 3 Subgenres, resolves authentic listener counts via Deezer's API call confirmations, and attaches genuine audio previews.
+2. `01_harvest_playlists.py`: Harvests 20+ user-created community playlists per subgenre via YouTube Music public searches, then expands through recommended-playlist shelves of verified anchor songs and related playlists of verified anchor playlists. Expansion playlists never inherit the seed genre: they are labeled from their own artists or left unlabeled. Applies strict Unicode sanitization, anti-discography filters, and curator caps.
+3. `02_enrich_artists.py`: Filters artists by $c_i \ge 4$ (playlists related to the same anchor playlist count as one independent appearance), computes IDF-weighted Top 3 Subgenres, resolves authentic listener counts via Deezer's API call confirmations, and attaches genuine audio previews.
 4. `03_build_cooccurrence.py`: Builds the sparse co-occurrence matrix from shared playlist co-presence.
 5. `04_normalize_and_sparsify.py`: Calculates cosine similarity, Jaccard coefficients, and k-NN sparsification.
 6. `05_community_and_layout.py`: Dynamic continental partitioning, gentle genre macro-initialization, strong-gravity ForceAtlas2 simulation, radial knee compression, and disk clearance.

@@ -443,6 +443,8 @@ def main():
     artist_canonical_case = {}
     artist_track_words = defaultdict(set)
     artist_playlists_set = defaultdict(set)
+    # Independent appearances: playlists related to the same anchor playlist form one neighbourhood and count once
+    artist_independent = defaultdict(set)
     normalized_occ = defaultdict(Counter)
     doc_freq = Counter()
 
@@ -450,6 +452,7 @@ def main():
         genre = pl.get("genre")
         seen_in_pl = set()
         pid = pl.get("id") or str(pl_idx)
+        independent_unit = pl.get("anchor_id") or pid
         for t in pl.get("tracks", []):
             name = t.get("artist_name", "").strip()
             title = t.get("title", "").strip()
@@ -460,6 +463,7 @@ def main():
                 artist_playlist_count[art_key] += 1
                 seen_in_pl.add(art_key)
                 artist_playlists_set[art_key].add(pid)
+                artist_independent[art_key].add(independent_unit)
                 if genre:
                     normalized_occ[art_key][genre] += 1
                     doc_freq[genre] += 1
@@ -472,7 +476,7 @@ def main():
     with open(OCCURRENCES_FILE, "w", encoding="utf-8") as f:
         json.dump(normalized_occ, f)
 
-    surviving_keys = [k for k, c in artist_playlist_count.items() if c >= args.min_playlists]
+    surviving_keys = [k for k, units in artist_independent.items() if len(units) >= args.min_playlists]
     # Sort descending by playlist count so most prominent headliners are processed first
     surviving_keys.sort(key=lambda k: artist_playlist_count[k], reverse=True)
 

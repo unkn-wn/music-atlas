@@ -49,7 +49,7 @@ const buildSite = (ctx) => {
   files.set('/search-index.json', {
     type: 'application/json; charset=utf-8',
     body: JSON.stringify({
-      artists: ctx.byPopularity.map((n) => [n.label, n.id, ctx.artistPaths.get(n.id) ?? 0, n.primaryGenre ?? '']),
+      artists: ctx.byPopularity.map((n) => [n.label, n.id, ctx.artistPaths.get(n.id) ?? 0, n.topSubgenres[0] ?? '']),
       genres: [...ctx.genrePaths].map(([name, path]) => [name, path, ctx.genres.get(name).length]),
     }),
   });

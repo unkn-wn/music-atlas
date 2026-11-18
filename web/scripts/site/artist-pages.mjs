@@ -1,5 +1,5 @@
 // A–Z artist index (/artists/, paginated letter pages) and a page per artist with enough playlist data
-import { filterValidSubgenres, formatSubscriberCount } from '../../src/utils/artistUtils';
+import { formatSubscriberCount } from '../../src/utils/artistUtils';
 import { resolveArtistImageUrl } from '../../src/utils/imageUtils';
 import { mapHref } from '../../src/utils/mapLink';
 import { SITE, HOME_CRUMB, esc, fmt, nameHtml, possessive, page, fitDescription, paginate, paginationNav, pageSuffix } from './layout.mjs';
@@ -34,7 +34,7 @@ const buildLetterPages = (ctx, html) => {
 ${letterNav(ctx.letters, letter)}
 ${paginationNav(pagePaths, i)}
 <ul class="artists">${list
-            .map((a) => `<li>${ctx.artistLink(a)}${a.primaryGenre ? `<span>${esc(a.primaryGenre)}</span>` : ''}</li>`)
+            .map((a) => `<li>${ctx.artistLink(a)}${a.topSubgenres[0] ? `<span>${esc(a.topSubgenres[0])}</span>` : ''}</li>`)
             .join('')}</ul>
 ${paginationNav(pagePaths, i)}`,
         }),
@@ -48,7 +48,10 @@ ${paginationNav(pagePaths, i)}`,
 // The most common primary genre among an artist's connections, if it covers at least two of them
 const dominantNeighborGenre = (neighbors) => {
   const counts = new Map();
-  for (const { node } of neighbors) if (node.primaryGenre) counts.set(node.primaryGenre, (counts.get(node.primaryGenre) ?? 0) + 1);
+  for (const { node } of neighbors) {
+    const [primary] = node.topSubgenres;
+    if (primary) counts.set(primary, (counts.get(primary) ?? 0) + 1);
+  }
   const [genre, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [];
   return count >= 2 ? { genre, count } : null;
 };
@@ -57,7 +60,7 @@ const artistPage = (ctx, node, path) => {
   const detail = ctx.details.get(node.id);
   const name = node.label;
   const neighbors = detail.topCrossovers.flatMap((c) => (ctx.nodeById.has(c.neighborId) ? [{ ...c, node: ctx.nodeById.get(c.neighborId) }] : []));
-  const genres = filterValidSubgenres(node.topSubgenres);
+  const genres = node.topSubgenres;
   const continent = ctx.continents.get(node.continentId);
   const listeners = formatSubscriberCount(node.subscribers);
   const crumbLetter = ctx.indexPageOf.get(node.id);
@@ -80,7 +83,7 @@ const artistPage = (ctx, node, path) => {
     ? `<h2 id="similar">Artists like ${esc(name)}</h2>
 <ol class="rows">${neighbors
         .map(
-          (n) => `<li>${ctx.artistLink(n.node)} <span class="meta">${n.node.primaryGenre ? `${esc(n.node.primaryGenre)} · ` : ''}${fmt(n.sharedPlaylists)} shared playlists · ${n.overlapPercent}% overlap</span><span class="note">${n.selfPercent}% of ${possessive(name)} playlists include ${nameHtml(n.node.label)}; ${n.neighborPercent}% of ${possessive(n.node.label)} include ${nameHtml(name)}.</span></li>`,
+          (n) => `<li>${ctx.artistLink(n.node)} <span class="meta">${n.node.topSubgenres[0] ? `${esc(n.node.topSubgenres[0])} · ` : ''}${fmt(n.sharedPlaylists)} shared playlists · ${n.overlapPercent}% overlap</span><span class="note">${n.selfPercent}% of ${possessive(name)} playlists include ${nameHtml(n.node.label)}; ${n.neighborPercent}% of ${possessive(n.node.label)} include ${nameHtml(name)}.</span></li>`,
         )
         .join('')}</ol>`
     : '';
@@ -88,7 +91,7 @@ const artistPage = (ctx, node, path) => {
   const image = node.image ? resolveArtistImageUrl(node.image) : '';
   const profile = `<div class="profile">${image ? `<img src="${esc(image)}" alt="${esc(name)}" width="120" height="120" referrerpolicy="no-referrer" />` : ''}<div>
 <h1>${esc(name)}</h1>
-<p class="lede">${[node.primaryGenre && esc(node.primaryGenre), `${listeners} listeners`, `in ${fmt(detail.totalPlaylists)} user-made playlists`].filter(Boolean).join(' · ')}${continent ? `<br />Part of the ${esc(continent.name)} community on the map.` : ''}</p>
+<p class="lede">${[genres[0] && esc(genres[0]), `${listeners} listeners`, `in ${fmt(detail.totalPlaylists)} user-made playlists`].filter(Boolean).join(' · ')}${continent ? `<br />Part of the ${esc(continent.name)} community on the map.` : ''}</p>
 </div></div>`;
 
   const actions = `<div class="actions"><a class="cta inline" href="${esc(mapHref({ artist: node.id }))}">Open ${esc(name)} on the map →</a><a class="cta ghost" href="${esc(mapHref({ from: node.id }))}">Trace a path from ${esc(name)}</a>${detail.deezerUrl ? `<a class="cta ghost" href="${esc(detail.deezerUrl)}" target="_blank" rel="noopener">Listen on Deezer</a>` : ''}</div>`;

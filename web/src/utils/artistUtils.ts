@@ -2,19 +2,7 @@ import { AtlasNode, ArtistDetail } from '../types/atlas';
 import { slugify } from './genreUtils';
 
 /** Artists found in at least this many playlists get a static /artist/<slug>/ page (the app and site plugin check it via hasArtistPage) */
-const ARTIST_PAGE_MIN_PLAYLISTS = 30;
-
-const INVALID_GENRE_NAMES = new Set(['other', 'artist', 'unknown', 'eclectic']);
-
-/**
- * Filters out system and non-descriptive subgenre tags.
- */
-export function filterValidSubgenres(subgenres: string[] | undefined): string[] {
-  if (!subgenres || !Array.isArray(subgenres)) return [];
-  return subgenres.filter(
-    (g) => g && !INVALID_GENRE_NAMES.has(g.trim().toLowerCase())
-  );
-}
+const ARTIST_PAGE_MIN_PLAYLISTS = 45;
 
 /**
  * Formats subscriber / listener count into a compact human-readable string (e.g., 2.4M, 150K).

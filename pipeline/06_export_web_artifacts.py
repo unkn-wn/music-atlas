@@ -1,12 +1,12 @@
 """
-Stage 5: Final Web Artifact Export (atlas-graph.json).
-Assembles layout coordinates, dynamic continental naming, normalized edge weights,
-inward radial Bézier curvature, verified subscriber counts, Top 3 Subgenres,
-and drawn connections (each artist's top 6 by playlist overlap; the drawer lists exactly these) into a unified,
-lightweight JSON bundle for the Sigma.js WebGL frontend.
+Stage 6: Final Web Artifact Export (atlas-graph.json).
+Assembles layout coordinates, continents, final genre tags (Stage 5), node sizes from verified fan counts,
+and drawn connections (connections.py: each artist's top 6 by playlist overlap plus bridge edges; the drawer
+lists exactly these) into a unified, lightweight JSON bundle for the Cosmograph WebGL frontend.
 Outputs:
 - pipeline/output/atlas-graph.json
-- web/public/data/atlas-graph.json
+- web/public/data/atlas-graph.json (and .json.gz)
+- details/continent_<id>.json in both directories (drawer details, loaded per continent)
 """
 
 import os
@@ -17,8 +17,9 @@ import math
 import time
 from datetime import datetime
 from collections import defaultdict
-from typing import Dict, List, Set, Any
 from tqdm import tqdm
+
+from connections import by_overlap, neighbor_lists, drawn_pairs
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -37,18 +38,12 @@ LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
 EDGES_FILE = os.path.join(OUTPUT_DIR, "sparsified_edges.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 
-DRAWN_EDGES_PER_ARTIST = 6
-
-def by_overlap(neighbors: List[Dict]) -> List[Dict]:
-    """Orders connections by playlist overlap, then shared playlist count."""
-    return sorted(neighbors, key=lambda x: (x["overlapPercent"], x["sharedPlaylists"]), reverse=True)
-
 def main():
     if not all(os.path.exists(f) for f in [CATALOG_FILE, COMMUNITIES_FILE, LAYOUT_FILE, EDGES_FILE]):
-        raise FileNotFoundError("Missing Stage 4 outputs. Run earlier pipeline stages first.")
+        raise FileNotFoundError("Missing Stage 2, 4 or 5 outputs. Run earlier pipeline stages first.")
 
     print("=" * 70)
-    print(" STAGE 5: LIGHTWEIGHT WEB ARTIFACT EXPORT (atlas-graph.json)")
+    print(" STAGE 6: LIGHTWEIGHT WEB ARTIFACT EXPORT (atlas-graph.json)")
     print("=" * 70)
     start_time = time.time()
 
@@ -61,7 +56,7 @@ def main():
     with open(EDGES_FILE, "r", encoding="utf-8") as f:
         edges = json.load(f)
 
-    # Load surviving artist IDs from Stage 4B
+    # Load surviving artist IDs from Stage 4
     surviving_ids = set()
     if os.path.exists(SURVIVORS_FILE):
         with open(SURVIVORS_FILE, "r", encoding="utf-8") as f:
@@ -76,34 +71,7 @@ def main():
     print(f"Loaded {len(catalog_map)} verified surviving artists with layout coordinates.")
 
     # 1. Index edge relationships per artist
-    raw_neighbors = defaultdict(list)
-    for e in edges:
-        src = e["source"]
-        dst = e["target"]
-        if src not in catalog_map or dst not in catalog_map:
-            continue
-
-        c_ij = int(e.get("rawSharedPlaylists", 1))
-        # % of each artist's playlists that include the other; overlap is their geometric mean
-        pct_src = float(e.get("crossoverSourcePercent", 0.0))
-        pct_dst = float(e.get("crossoverTargetPercent", 0.0))
-        overlap = round(math.sqrt(pct_src * pct_dst), 1)
-
-        raw_neighbors[src].append({
-            "neighborId": dst,
-            "overlapPercent": overlap,
-            "sharedPlaylists": c_ij,
-            "selfPercent": round(pct_src, 1),
-            "neighborPercent": round(pct_dst, 1)
-        })
-
-        raw_neighbors[dst].append({
-            "neighborId": src,
-            "overlapPercent": overlap,
-            "sharedPlaylists": c_ij,
-            "selfPercent": round(pct_dst, 1),
-            "neighborPercent": round(pct_src, 1)
-        })
+    raw_neighbors = neighbor_lists(edges, set(catalog_map))
 
     # 2. Compute subscriber scaling range for empirical node sizing using Log10-Power scaling
     all_subs = [max(1000, a.get("subscribers", 1000)) for a in catalog_map.values()]
@@ -124,23 +92,12 @@ def main():
 
     # Drawn edges: each artist's top 6 by playlist overlap (capped to eliminate panning lag),
     # plus bridge edges connecting satellite clusters
-    active_edge_pairs = set()
-    for a_id in catalog_map:
-        for n in by_overlap(raw_neighbors[a_id])[:DRAWN_EDGES_PER_ARTIST]:
-            active_edge_pairs.add(tuple(sorted([a_id, n["neighborId"]])))
-    for e in edges:
-        if e.get("isBridge"):
-            active_edge_pairs.add(tuple(sorted([e["source"], e["target"]])))
+    active_edge_pairs = drawn_pairs(edges, raw_neighbors, set(catalog_map))
 
-    for a_id, meta in tqdm(catalog_map.items(), desc="Stage 5: Assembling Web Nodes & Details", unit="node"):
+    for a_id, meta in tqdm(catalog_map.items(), desc="Stage 6: Assembling Web Nodes & Details", unit="node"):
         pos = coords.get(a_id, {"x": 0.0, "y": 0.0})
-        comm_info = artist_continent_map.get(a_id, {
-            "continentId": 1,
-            "continentName": meta.get("primaryGenre", "Other"),
-            "communityId": 1,
-            "communityName": meta.get("primaryGenre", "Other"),
-            "color": "#00E5FF"
-        })
+        comm_info = artist_continent_map[a_id]
+        tags = comm_info["topSubgenres"]
 
         subs = max(1000, meta.get("subscribers", 1000))
         ratio = (math.log10(subs) - log_min) / log_diff
@@ -165,8 +122,7 @@ def main():
             "size": node_size,
             "color": comm_info["color"],
             "continentId": comm_info["continentId"],
-            "primaryGenre": meta.get("primaryGenre") or comm_info.get("primaryGenre", "Other"),
-            "topSubgenres": meta.get("topSubgenres", []),
+            "topSubgenres": tags,
             "image": meta.get("image", ""),
             "subscribers": subs
         })
@@ -181,7 +137,7 @@ def main():
 
     # 4. Assemble High-Performance Straight Edges (Strictly Active Pairs + Bridges)
     formatted_edges = []
-    for e in tqdm(edges, desc="Stage 5: Assembling Straight Edges", unit="edge"):
+    for e in tqdm(edges, desc="Stage 6: Assembling Straight Edges", unit="edge"):
         src = e["source"]
         dst = e["target"]
         if src not in catalog_map or dst not in catalog_map:
@@ -252,7 +208,7 @@ def main():
     # Save chunked continent details to pipeline and web
     continent_details = defaultdict(dict)
     for a_id, d in details.items():
-        c_id = artist_continent_map.get(a_id, {}).get("continentId", 1)
+        c_id = artist_continent_map[a_id]["continentId"]
         continent_details[c_id][a_id] = d
 
     for c_id, c_data in continent_details.items():
@@ -271,7 +227,7 @@ def main():
     if os.path.exists(old_details_pipe):
         os.remove(old_details_pipe)
 
-    print(f"\nStage 5 complete in {time.time() - start_time:.2f}s!")
+    print(f"\nStage 6 complete in {time.time() - start_time:.2f}s!")
     print(f"Exported atlas bundle with {len(nodes)} nodes, {len(formatted_edges)} edges, {len(clean_continents)} continents.")
     print(f"Artifact location: {out_web} (Size: {os.path.getsize(out_web) / (1024 * 1024):.2f} MB)")
     print(f"Chunked details into {len(continent_details)} continent files in {WEB_DETAILS_DIR}")

@@ -29,7 +29,6 @@ export interface AtlasNode {
   color: string;
   continentId: number;
   continentName?: string;
-  primaryGenre: string;
   topSubgenres: string[];
   image: string;
   subscribers: number;

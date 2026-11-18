@@ -3,7 +3,7 @@ import { X, Play, Pause, ExternalLink, Disc3, ArrowRight, Route } from 'lucide-r
 import { AtlasNode } from '../types/atlas';
 import { SheetPanel } from './panel/SheetPanel';
 import { resolveArtistImageUrl, DEFAULT_FALLBACK_AVATAR } from '../utils/imageUtils';
-import { filterValidSubgenres, formatSubscriberCount } from '../utils/artistUtils';
+import { formatSubscriberCount } from '../utils/artistUtils';
 
 const DEFAULT_ACCENT_COLOR = '#10b981';
 const PROGRESS_BAR_WHITE_PCT = 45;
@@ -49,7 +49,7 @@ export const ArtistDrawer: React.FC<ArtistDrawerProps> = ({
 
   const maxOverlap = displayedNeighbors.length > 0 ? displayedNeighbors[0].overlapPercent : 1;
   const subscriberDisplay = formatSubscriberCount(artist.subscribers, artist.subscribersFormatted);
-  const subgenres = useMemo(() => filterValidSubgenres(artist.topSubgenres), [artist.topSubgenres]);
+  const subgenres = artist.topSubgenres;
   const hasPreview = Boolean(artist.id || artist.label);
   const sidebarImageUrl = useMemo(() => resolveArtistImageUrl(artist.image), [artist.image]);
 

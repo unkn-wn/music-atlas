@@ -3,7 +3,7 @@ import { X, Tags, Users, Globe2, Sparkles, ExternalLink } from 'lucide-react';
 import { AtlasNode, Continent } from '../types/atlas';
 import { SheetPanel } from './panel/SheetPanel';
 import { useGenreInfo } from '../hooks/useGenreInfo';
-import { filterValidSubgenres, formatSubscriberCount } from '../utils/artistUtils';
+import { formatSubscriberCount } from '../utils/artistUtils';
 import { findRelatedGenres, formatInception, groupByContinent, hasGenrePage, slugify } from '../utils/genreUtils';
 import { resolveArtistImageUrl, DEFAULT_FALLBACK_AVATAR } from '../utils/imageUtils';
 
@@ -57,7 +57,7 @@ export const GenrePanel: React.FC<GenrePanelProps> = ({
       findRelatedGenres(
         genre,
         members,
-        (idx) => filterValidSubgenres(nodes[idx].topSubgenres),
+        (idx) => nodes[idx].topSubgenres,
         (name) => genreMembers.get(name)?.length ?? 1
       ),
     [genre, members, nodes, genreMembers]

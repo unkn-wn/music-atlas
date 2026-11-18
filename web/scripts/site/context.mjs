@@ -5,7 +5,6 @@ import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { slugify, hasGenrePage } from '../../src/utils/genreUtils';
 import {
-  filterValidSubgenres,
   parseContinentDetails,
   hasArtistPage,
   findDuplicateArtistSlugs,
@@ -40,7 +39,7 @@ const readDetails = (dir) => {
 const groupGenres = (byPopularity) => {
   const genres = new Map();
   for (const node of byPopularity) {
-    for (const genre of filterValidSubgenres(node.topSubgenres)) {
+    for (const genre of node.topSubgenres) {
       if (!genres.has(genre)) genres.set(genre, []);
       genres.get(genre).push(node);
     }

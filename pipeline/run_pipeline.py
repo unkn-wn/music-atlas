@@ -52,7 +52,7 @@ def main():
     parser.add_argument("--resolution", type=float, default=None, help="Louvain modularity resolution parameter in Stage 5 (default: auto)")
     parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width in Stage 5 (default: 6400.0)")
     parser.add_argument("--reverse", action="store_true", help="Process genres in reverse rank order (niche/underground genres first)")
-    parser.add_argument("--revisit", action="store_true", help="Stage 1: re-run genres still below --target-playlists instead of skipping checkpointed ones")
+    parser.add_argument("--revisit", action="store_true", help="Stage 1: re-run the recommended-playlist phase for checkpointed genres still below --target-playlists")
     args = parser.parse_args()
 
     OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")

@@ -37,7 +37,7 @@ const loadIndex = () =>
       // Only the fields the search reads; the file is already in popularity order
       const nodes = file.artists.map(([label, id, path, primaryGenre]) => {
         if (path) pathOf.set(id, path);
-        return { id, label, primaryGenre, topSubgenres: [], subscribers: 0 } as unknown as AtlasNode;
+        return { id, label, topSubgenres: primaryGenre ? [primaryGenre] : [], subscribers: 0 } as unknown as AtlasNode;
       });
       return {
         artists: buildSearchIndex(nodes),
@@ -86,7 +86,7 @@ const render = (index: LoadedIndex, query: string) => {
   }
   for (const artist of searchArtists(index.artists, query, ARTIST_RESULTS)) {
     const path = index.pathOf.get(artist.id) ?? null;
-    list.append(row(artist.label, artist.primaryGenre, path, path ? undefined : mapHref({ artist: artist.id })));
+    list.append(row(artist.label, artist.topSubgenres[0] ?? '', path, path ? undefined : mapHref({ artist: artist.id })));
   }
   results.append(list.childElementCount ? list : el('p', 'result-empty', 'No artists or genres match.'));
   results.hidden = false;

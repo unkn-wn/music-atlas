@@ -1,7 +1,7 @@
 // /genres/ index and a page per genre: who's in it, where it sits on the map, its strongest pairings and
 // related genres, all computed from the atlas
 import { slugify, findRelatedGenres, formatInception, groupByContinent } from '../../src/utils/genreUtils';
-import { filterValidSubgenres, formatSubscriberCount } from '../../src/utils/artistUtils';
+import { formatSubscriberCount } from '../../src/utils/artistUtils';
 import { mapHref } from '../../src/utils/mapLink';
 import { SITE, HOME_CRUMB, esc, fmt, pct, page, fitDescription, paginate, paginationNav, pageSuffix } from './layout.mjs';
 import { PAGE_SIZE, pagePath, letterOf, letterSlug } from './context.mjs';
@@ -20,9 +20,8 @@ const strongestPairings = (ctx) => {
     const a = ctx.nodeById.get(edge.source);
     const b = ctx.nodeById.get(edge.target);
     if (!a || !b) continue;
-    const bGenres = filterValidSubgenres(b.topSubgenres);
-    for (const genre of filterValidSubgenres(a.topSubgenres)) {
-      if (!bGenres.includes(genre) || !ctx.genrePaths.has(genre)) continue;
+    for (const genre of a.topSubgenres) {
+      if (!b.topSubgenres.includes(genre) || !ctx.genrePaths.has(genre)) continue;
       if (!pairings.has(genre)) pairings.set(genre, []);
       pairings.get(genre).push({ a, b, playlists: edge.playlists ?? 0 });
     }
@@ -70,7 +69,7 @@ ${footprintSvg(genre, members, projection)}
 <p class="source">Genres that share the most artists with ${esc(genre)}, for their size.</p>
 <ul class="rows">${related
         .map((r) => {
-          const bridges = members.filter((n) => filterValidSubgenres(n.topSubgenres).includes(r.name)).slice(0, BRIDGE_ARTISTS);
+          const bridges = members.filter((n) => n.topSubgenres.includes(r.name)).slice(0, BRIDGE_ARTISTS);
           return `<li>${genreLink(ctx, r.name)} <span class="meta">· ${fmt(r.sharedArtists)} shared artists</span><span class="note">Both: ${bridges.map((n) => ctx.artistLink(n)).join(', ')}</span></li>`;
         })
         .join('')}</ul>`
@@ -86,11 +85,13 @@ const genrePages = (ctx, genre, members, pairings, projection, html) => {
   const related = findRelatedGenres(
     genre,
     members,
-    (node) => filterValidSubgenres(node.topSubgenres),
+    (node) => node.topSubgenres,
     (name) => ctx.genres.get(name)?.length ?? 1,
   );
   const info = Object.prototype.hasOwnProperty.call(ctx.genreInfo, genre) ? ctx.genreInfo[genre] : undefined;
   const top = members.slice(0, 3).map((a) => a.label).join(', ');
+  // Many genres have no pairings or related genres, so the title and description only promise what the page shows
+  const extras = [pairings?.length && 'strongest pairings', related.length && 'related genres'].filter(Boolean);
 
   pages.forEach((list, i) => {
     const path = pagePaths[i];
@@ -101,11 +102,11 @@ const genrePages = (ctx, genre, members, pairings, projection, html) => {
       path,
       page({
         path,
-        title: i === 0 ? `${genre} Artists & Related Genres` : `${genre} Artists${suffix}`,
+        title: i === 0 && related.length ? `${genre} Artists & Related Genres` : `${genre} Artists${suffix}`,
         // Only the first page carries the pairings and related genres
         description: fitDescription([
           `${fmt(members.length)} ${genre} artists, including ${top}, mapped by real community playlists${suffix}.`,
-          ...(i === 0 ? ['See its strongest pairings and related genres.'] : []),
+          ...(i === 0 && extras.length ? [`See its ${extras.join(' and ')}.`] : []),
         ]),
         crumbs: [HOME_CRUMB, GENRES_CRUMB, { name: `${genre}${suffix}`, path }],
         jsonLd: [
@@ -129,7 +130,7 @@ ${i === 0 ? overviewSections(ctx, genre, members, related, pairings, projection)
 <p class="source">${fmt(members.length)} artists tagged ${esc(genre)}, ranked by listeners.</p>
 ${paginationNav(pagePaths, i)}
 <ol class="artists" start="${firstRank}">${list
-          .map((a) => `<li>${ctx.artistLink(a)}<span>${formatSubscriberCount(a.subscribers)} listeners${a.primaryGenre && a.primaryGenre !== genre ? ` · ${esc(a.primaryGenre)}` : ''}</span></li>`)
+          .map((a) => `<li>${ctx.artistLink(a)}<span>${formatSubscriberCount(a.subscribers)} listeners${a.topSubgenres[0] !== genre ? ` · ${esc(a.topSubgenres[0])}` : ''}</span></li>`)
           .join('')}</ol>
 ${paginationNav(pagePaths, i)}`,
       }),
@@ -153,10 +154,10 @@ export const buildGenrePages = (ctx, html) => {
     page({
       path: '/genres/',
       title: `All ${fmt(names.length)} Genres`,
-      description: `Browse ${fmt(names.length)} music genres on Music Atlas, each with its artists, related genres and where it sits on the map of real community playlists.`,
+      description: `Browse ${fmt(names.length)} music genres on Music Atlas, each with its artists and where it sits on the map of real community playlists.`,
       crumbs: [HOME_CRUMB, GENRES_CRUMB],
       body: `<h1>Every genre on the map</h1>
-<p class="lede">${fmt(names.length)} genres from EveryNoise with at least five artists, each holding the artists whose playlists tag them with it. Pick one to see its artists, where it sits on the map and its related genres.</p>
+<p class="lede">${fmt(names.length)} genres from EveryNoise with at least five artists, each holding the artists tagged with it, from their Wikidata genres or their playlists. Pick one to see its artists, where it sits on the map and, when it shares artists with other genres, its related genres.</p>
 <nav class="letters" aria-label="Genres by letter">${[...byLetter.keys()].map((l) => `<a href="#${letterSlug(l)}">${l}</a>`).join('')}</nav>
 ${[...byLetter]
   .map(

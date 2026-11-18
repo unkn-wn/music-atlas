@@ -9,13 +9,14 @@ Implements:
    - Tie-breaks strictly among exact normalized matches by authentic platform fan count (nb_fan).
    - Resolves 1000x1000 high-res press portraits (picture_xl).
    - Resolves genuine 30-second AAC/MP3 audio preview URLs and top track titles.
-   - Assigns definitive continental macro-genres (Rock, Pop, Alternative, Rap/Hip Hop, Electro, etc.).
    - Gathers authentic platform fan counts (nb_fan) for log-scaled node sizing in WebGL.
-3. IDF-Weighted Specificity Scoring:
-   - Extracts Top 3 Distinct Subgenres from EveryNoise provenance counts.
+   - A name under which two or more YouTube channels each meet the survival rule is resolved per channel, by
+     searching Deezer for that channel's own songs.
+3. Genre Tags (genre_tags.py): up to 3 EveryNoise genres per artist, from the artist's Wikidata genre statements
+   (only those its playlists support), else playlist consensus, else the single best playlist genre.
 4. Zero Spotify or YouTube Music dependencies. Zero daily quotas, zero 403 blocks.
 5. Persistent Checkpointing & Cache Management:
-   - Saves progress atomically every 25 artists in pipeline/output/artist_enrichment_cache.json.
+   - Saves progress atomically every 500 Deezer lookups in pipeline/output/artist_enrichment_cache.json.
 6. Outputs:
    - pipeline/output/artists_catalog.json
    - pipeline/output/surviving_artist_ids.json
@@ -35,6 +36,10 @@ from typing import Dict, List, Optional, Tuple, Any, Set
 import httpx
 from tqdm import tqdm
 
+from genre_tags import assign_tags, artist_keys, playlist_members, playlist_unit
+from sanitizer import song_key
+from wikidata import load_genre_items, genres_by_item, load_artist_genres
+
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -47,7 +52,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
-OCCURRENCES_FILE = os.path.join(OUTPUT_DIR, "artist_subgenre_occurrences.json")
 CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 CACHE_FILE = os.path.join(OUTPUT_DIR, "artist_enrichment_cache.json")
@@ -176,6 +180,9 @@ def extract_content_words(title: str) -> Set[str]:
 
 # --- Pure Deezer API Client ---
 
+SONG_TRIES = 5     # songs of a shared name's channel searched on Deezer to identify its artist...
+SONG_MATCHES = 2   # ...who must have released this many of them
+
 class DeezerArbiter:
     """
     Direct client for Deezer API:
@@ -215,6 +222,66 @@ class DeezerArbiter:
             except Exception:
                 pass
         return []
+
+    def _get(self, url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """A paced GET. None when Deezer keeps failing or answers with an error other than its quota."""
+        for retry in range(3):
+            try:
+                self._pace()
+                r = self.http.get(url, params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    if "error" not in data:
+                        return data
+                    err = data.get("error", {})
+                    if err.get("code") != 4 and "quota" not in err.get("message", "").lower():
+                        return None
+                time.sleep(1.5 * (retry + 1))
+            except Exception:
+                pass
+        return None
+
+    def identify_by_songs(self, target_name: str, titles: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        For one channel of a name several YouTube artists share: the Deezer artist of that name who released the
+        channel's songs, which the name alone cannot tell. titles: the channel's track titles, most credited first.
+        A search result counts when its title is the song's and its artist carries the name (deterministic_match).
+        Returns the artist found for SONG_MATCHES of the channel's SONG_TRIES most credited songs (for its only
+        song, when it has one) unless another artist ties, with the fields of verify_and_enrich; otherwise None.
+        """
+        songs: Dict[str, str] = {}
+        for title in titles:
+            song = song_key(title)
+            key = alphanumeric_key(song)
+            if key and key not in songs and len(songs) < SONG_TRIES:
+                songs[key] = song
+        votes: Counter = Counter()
+        found: Dict[int, Dict[str, Any]] = {}
+        for key, song in songs.items():
+            data = self._get("https://api.deezer.com/search", {"q": f"{target_name} {song}", "limit": 15}) or {}
+            tracks = [t for t in data.get("data", []) if alphanumeric_key(song_key(t.get("title") or "")) == key]
+            matched, artist, _ = deterministic_match(target_name, [t["artist"] for t in tracks])
+            if matched:
+                votes[artist["id"]] += 1
+                found.setdefault(artist["id"], next(t for t in tracks if t["artist"]["id"] == artist["id"]))
+                if votes[artist["id"]] >= SONG_MATCHES:
+                    break
+        ranked = votes.most_common(2)
+        if not ranked or ranked[0][1] < min(SONG_MATCHES, len(songs)) or (len(ranked) > 1 and ranked[1][1] == ranked[0][1]):
+            return None
+        aid = ranked[0][0]
+        artist = self._get(f"https://api.deezer.com/artist/{aid}")
+        if not artist:
+            return None
+        return {
+            "id": f"dz_{aid}",
+            "deezer_id": aid,
+            "name": artist.get("name", target_name),
+            "fans": artist.get("nb_fan") or 0,
+            "image": artist.get("picture_xl") or artist.get("picture_medium", ""),
+            "previewUrl": found[aid].get("preview") or "",
+            "deezer_url": artist.get("link", f"https://www.deezer.com/artist/{aid}")
+        }
 
     def verify_and_enrich(
         self, 
@@ -345,77 +412,6 @@ class DeezerArbiter:
 
         return False, None
 
-# --- Rank-Aware Top Subgenre Engine ---
-
-def format_genre_name(name: str) -> str:
-    """Formats genre and acronym strings cleanly for display."""
-    if not name:
-        return ""
-    name = name.strip()
-    acronym_map = {
-        "r&b": "R&B",
-        "ccm": "CCM",
-        "edm": "EDM",
-        "k-pop": "K-Pop",
-        "j-pop": "J-Pop",
-        "j-rock": "J-Rock",
-        "ost": "OST",
-        "uk": "UK",
-        "idm": "IDM",
-        "opm": "OPM",
-        "mpb": "MPB",
-        "nz": "NZ",
-        "v-pop": "V-Pop"
-    }
-    parts = name.split()
-    return " ".join(acronym_map.get(p.lower(), p.title()) for p in parts)
-
-def compute_rank_aware_top_subgenres(
-    artist_genres: Counter,
-    genre_ranks: Dict[str, int],
-    total_playlists: int,
-    top_k: int = 3
-) -> List[str]:
-    """
-    Computes authentic, rank-aware, specificity-balanced top subgenres for an artist:
-    1. Anti-Fluke Noise Floor:
-       For artists appearing in >= 6 playlists, discard single-occurrence genres (cnt < 2)
-       to prevent accidental fluke crossover appearances from polluting their core identity.
-    2. Artist-Relative Dominance (Purity):
-       Share(A, g) = count(A, g) / sum(count(A, g'))
-    3. Foundational Rank Weighting (EveryNoise popularity rank):
-       W_rank(g) = 1.0 / (Rank(g) ** 0.5)
-    4. Deterministic Ranking:
-       Score(A, g) = (count ** 0.85) * (share ** 0.3) * W_rank(g)
-    """
-    if not artist_genres:
-        return []
-
-    total_occurrences = sum(artist_genres.values())
-    if total_occurrences == 0:
-        return []
-
-    candidates = {}
-    for g, cnt in artist_genres.items():
-        share = cnt / total_occurrences
-        if total_playlists >= 6 and cnt < 2:
-            continue
-        candidates[g] = (cnt, share)
-
-    if not candidates:
-        for g, cnt in artist_genres.items():
-            candidates[g] = (cnt, cnt / total_occurrences)
-
-    scored = []
-    for g, (cnt, share) in candidates.items():
-        rank = genre_ranks.get(g.lower().strip(), 3500)
-        w_rank = 1.0 / ((70.0 + rank) ** 0.65)
-        score = (cnt ** 0.85) * (share ** 0.3) * w_rank
-        scored.append((score, cnt, g))
-
-    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [format_genre_name(g) for _, _, g in scored[:top_k]]
-
 # --- Main Execution ---
 
 def main():
@@ -431,60 +427,75 @@ def main():
     print("=" * 70)
     print(f" STAGE 2: DETERMINISTIC VERIFICATION & ENRICHMENT (Survival: c_i >= {args.min_playlists})")
     print(" Arbiter & Previews: Official Deezer Music Catalog (120M+ tracks)")
-    print(" Secondary Subgenres: EveryNoise IDF Provenance")
+    print(" Genre Tags: Wikidata statements (playlist-supported), else playlist consensus")
     print("=" * 70)
     start_time = time.time()
 
     with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
         playlists = json.load(f)
 
-    # 1. Count independent qualifying playlist appearances per artist, index track words, and index subgenre occurrences
-    artist_playlist_count = Counter()
-    artist_canonical_case = {}
-    artist_track_words = defaultdict(set)
-    artist_playlists_set = defaultdict(set)
+    # 1. Credit groups: a credited name together with the YouTube channel it is credited to ("" when the track names
+    # no artist channel). Different artists share names but not channels, so a name several channels use is never
+    # assumed to be one artist.
+    group_playlists = defaultdict(set)
     # Independent appearances: playlists related to the same anchor playlist form one neighbourhood and count once
-    artist_independent = defaultdict(set)
-    normalized_occ = defaultdict(Counter)
-    doc_freq = Counter()
+    group_units = defaultdict(set)
+    group_words = defaultdict(set)
+    name_groups = defaultdict(set)
+    artist_canonical_case = {}
 
     for pl_idx, pl in enumerate(playlists):
-        genre = pl.get("genre")
-        seen_in_pl = set()
         pid = pl.get("id") or str(pl_idx)
-        independent_unit = pl.get("anchor_id") or pid
+        independent_unit = playlist_unit(pl, pl_idx)
         for t in pl.get("tracks", []):
             name = t.get("artist_name", "").strip()
             title = t.get("title", "").strip()
             if not name:
                 continue
             art_key = name.lower()
-            if art_key not in seen_in_pl:
-                artist_playlist_count[art_key] += 1
-                seen_in_pl.add(art_key)
-                artist_playlists_set[art_key].add(pid)
-                artist_independent[art_key].add(independent_unit)
-                if genre:
-                    normalized_occ[art_key][genre] += 1
-                    doc_freq[genre] += 1
+            group = (art_key, t.get("channel_id") or "")
+            name_groups[art_key].add(group)
+            group_playlists[group].add(pid)
+            group_units[group].add(independent_unit)
             if title:
-                artist_track_words[art_key].update(extract_content_words(title))
+                group_words[group].update(extract_content_words(title))
             if art_key not in artist_canonical_case or name[0].isupper():
                 artist_canonical_case[art_key] = name
 
-    # Sync occurrences file with all current playlists
-    with open(OCCURRENCES_FILE, "w", encoding="utf-8") as f:
-        json.dump(normalized_occ, f)
+    def union(sets, groups) -> Set[str]:
+        return set().union(*(sets[g] for g in groups))
 
-    surviving_keys = [k for k, units in artist_independent.items() if len(units) >= args.min_playlists]
-    # Sort descending by playlist count so most prominent headliners are processed first
-    surviving_keys.sort(key=lambda k: artist_playlist_count[k], reverse=True)
+    # Candidates: (name, the credit groups verified together, whether several artists may share the name). A name is
+    # shared when two or more of its channels each meet the survival threshold by themselves: each is then a candidate
+    # identified by its own songs, and the name's smaller channels are credited to no one. Any other name is one
+    # candidate with all its credits.
+    candidates = []
+    for art_key, groups in name_groups.items():
+        if len(union(group_units, groups)) < args.min_playlists:
+            continue
+        channels = sorted(g for g in groups if g[1] and len(group_units[g]) >= args.min_playlists)
+        if len(channels) <= 1:
+            candidates.append((art_key, tuple(sorted(groups)), False))
+        else:
+            candidates.extend((art_key, (g,), True) for g in channels)
+    # Most prominent names first, the channels of a shared name together
+    name_playlists = {art_key: len(union(group_playlists, name_groups[art_key])) for art_key, _, _ in candidates}
+    candidates.sort(key=lambda c: (-name_playlists[c[0]], c[0]))
 
     if args.limit:
-        surviving_keys = surviving_keys[:args.limit]
+        candidates = candidates[:args.limit]
 
-    print(f"Total candidate artists harvested: {len(artist_playlist_count)}")
-    print(f"Surviving candidates meeting c_i >= {args.min_playlists}: {len(surviving_keys)}")
+    # Track titles of the shared names' channels, most credited first, to identify each channel by its songs
+    channel_titles: Dict[Tuple[str, str], Counter] = {c[1][0]: Counter() for c in candidates if c[2]}
+    for pl in playlists:
+        for t in pl.get("tracks", []):
+            group = (t.get("artist_name", "").strip().lower(), t.get("channel_id") or "")
+            if group in channel_titles and t.get("title"):
+                channel_titles[group][t["title"].strip()] += 1
+
+    print(f"Total candidate artist names harvested: {len(name_groups)}")
+    print(f"Candidates meeting c_i >= {args.min_playlists}: {len(candidates)} "
+          f"({sum(1 for c in candidates if c[2])} channels of shared names)")
 
     # 2. Ingest persistent cache
     cache = load_json_cache(CACHE_FILE)
@@ -498,25 +509,25 @@ def main():
             genre_ranks = {item["genre"].lower().strip(): item["rank"] for item in ranked_data if "genre" in item and "rank" in item}
     print(f"Loaded {len(genre_ranks)} genre popularity ranks from EveryNoise.")
 
-    total_docs = max(1, len(normalized_occ))
-
     deezer = DeezerArbiter()
 
-    artist_meta_map: Dict[str, Dict[str, Any]] = {}
+    verified_candidates: List[Tuple[Tuple, Dict[str, Any]]] = []
     verified_catalog = []
     surviving_artist_ids = []
 
-    pbar = tqdm(surviving_keys, desc="Stage 2: Verifying with Deezer", unit="artist")
+    pbar = tqdm(candidates, desc="Stage 2: Verifying with Deezer", unit="artist")
     checkpoint_counter = 0
 
     try:
-        for art_key in pbar:
+        for candidate in pbar:
+            art_key, groups, shared_name = candidate
             display_name = artist_canonical_case.get(art_key, art_key)
-            total_pl = artist_playlist_count[art_key]
-            words_for_artist = set(artist_track_words.get(art_key, set()))
+            total_pl = len(union(group_playlists, groups))
+            words_for_artist = union(group_words, groups)
             words_for_artist.discard(art_key)
 
-            cached_entry = cache.get(art_key) or cache.get(display_name.lower())
+            cache_key = f"{art_key}\t{groups[0][1]}" if shared_name else art_key
+            cached_entry = cache.get(cache_key)
 
             if cached_entry and "verified" in cached_entry:
                 if not cached_entry["verified"]:
@@ -525,11 +536,21 @@ def main():
             elif args.offline:
                 continue
             else:
+                # Checkpoint by new lookups only: cached artists cost nothing and must not rewrite the cache file
+                checkpoint_counter += 1
+                if checkpoint_counter % 500 == 0:
+                    save_json_cache(CACHE_FILE, cache)
                 # Deterministic Deezer Verification & Enrichment with Disambiguation Guard
-                is_verified, dz_meta = deezer.verify_and_enrich(display_name, playlist_words=words_for_artist)
+                # A shared name's channel is identified by its songs; when Deezer lists none of them under the name
+                # (it may spell the artist differently), the name is verified as for any other artist.
+                dz_meta = None
+                if shared_name:
+                    dz_meta = deezer.identify_by_songs(display_name, [title for title, _ in channel_titles[groups[0]].most_common()])
+                if not dz_meta:
+                    dz_meta = deezer.verify_and_enrich(display_name, playlist_words=words_for_artist)[1]
 
-                if not is_verified or not dz_meta:
-                    cache[art_key] = {"verified": False}
+                if not dz_meta:
+                    cache[cache_key] = {"verified": False}
                     continue
 
                 canonical_name = dz_meta.get("name", display_name)
@@ -551,13 +572,9 @@ def main():
                     "totalPlaylists": total_pl
                 }
 
-                cache[art_key] = meta
+                cache[cache_key] = meta
 
-            artist_meta_map[art_key] = meta
-
-            checkpoint_counter += 1
-            if checkpoint_counter % 25 == 0 and not args.offline:
-                save_json_cache(CACHE_FILE, cache)
+            verified_candidates.append((candidate, meta))
 
     finally:
         deezer.http.close()
@@ -565,50 +582,43 @@ def main():
             save_json_cache(CACHE_FILE, cache)
 
     # 4. Canonical De-duplication & Merging by Deezer ID (Guardrail 4)
-    # Groups all scraped variants (e.g. 'bach', 'j.s. bach', 'johann sebastian bach')
+    # Groups all verified credits (e.g. 'bach', 'j.s. bach', 'johann sebastian bach', or two channels of one artist)
     # under their single canonical Deezer ID with exact mathematical playlist union.
     canonical_artist_records: Dict[str, Dict[str, Any]] = {}
-    canonical_playlists_union: Dict[str, Set[str]] = defaultdict(set)
-    canonical_scraped_names: Dict[str, List[str]] = defaultdict(list)
-    canonical_genre_occurrences: Dict[str, Counter] = defaultdict(Counter)
+    canonical_groups: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
+    # Catalog credits [name, channel]: channel None = the name under any channel (no other YouTube artist uses it)
+    canonical_credits: Dict[str, List[List[Optional[str]]]] = defaultdict(list)
+    shared_name_ids: Dict[str, Set[str]] = defaultdict(set)
 
-    for art_key, meta in artist_meta_map.items():
+    for (art_key, groups, shared_name), meta in verified_candidates:
         aid = meta["id"]
-        canonical_playlists_union[aid].update(artist_playlists_set[art_key])
-        if art_key not in canonical_scraped_names[aid]:
-            canonical_scraped_names[aid].append(art_key)
-        for g, cnt in normalized_occ[art_key].items():
-            canonical_genre_occurrences[aid][g] += cnt
-
-        if aid not in canonical_artist_records:
+        canonical_groups[aid].update(groups)
+        canonical_credits[aid].append([art_key, groups[0][1] if shared_name else None])
+        if shared_name:
+            shared_name_ids[art_key].add(aid)
+        if aid not in canonical_artist_records or meta.get("fans", 0) > canonical_artist_records[aid].get("fans", 0):
             canonical_artist_records[aid] = meta
-        else:
-            if meta.get("fans", 0) > canonical_artist_records[aid].get("fans", 0):
-                canonical_artist_records[aid] = meta
+
+    # A shared name's credits without a channel belong to an artist only when all its verified channels are that artist
+    for art_key, ids in shared_name_ids.items():
+        if len(ids) == 1 and (art_key, "") in name_groups[art_key]:
+            aid = next(iter(ids))
+            canonical_groups[aid].add((art_key, ""))
+            canonical_credits[aid].append([art_key, ""])
 
     for aid, meta in canonical_artist_records.items():
-        total_pl = len(canonical_playlists_union[aid])
+        total_pl = len(union(group_playlists, canonical_groups[aid]))
         fans = meta.get("fans", 0)
         canonical_name = meta.get("name", "")
-        scraped_list = canonical_scraped_names[aid]
-        primary_scraped = scraped_list[0] if scraped_list else canonical_name.lower()
-
-        # Top 3 Rank-Aware Specificity Subgenres computed from merged occurrences across all variants
-        # Artists seen only in unlabelled playlists have no subgenre evidence; stage 05 assigns their continent's genre
-        top_subgenres = compute_rank_aware_top_subgenres(canonical_genre_occurrences[aid], genre_ranks, total_pl)
-        primary_genre = top_subgenres[0] if top_subgenres else ""
 
         catalog_entry = {
             "id": aid,
             "name": canonical_name,
-            "scraped_name": primary_scraped,
-            "scraped_names": scraped_list,
+            "credits": canonical_credits[aid],
             "subscribers": fans,
             "formattedSubscribers": format_fans(fans),
             "subscribersFormatted": format_fans(fans),
             "popularity": calculate_log_popularity(fans),
-            "primaryGenre": primary_genre,
-            "topSubgenres": top_subgenres,
             "previewUrl": meta.get("previewUrl", ""),
             "image": meta.get("image", ""),
             "spotifyUrl": meta.get("spotifyUrl", f"https://open.spotify.com/search/{canonical_name}"),
@@ -619,6 +629,22 @@ def main():
 
         verified_catalog.append(catalog_entry)
         surviving_artist_ids.append(aid)
+
+    # 5. Genre tags (genre_tags.py steps 1-3): Wikidata statements supported by playlists, else playlist consensus,
+    # else one tag from the harvest labels.
+    # Playlist members are Deezer IDs, resolved exactly as Stage 3 resolves them for connections.
+    keys = artist_keys(verified_catalog)
+    members = [playlist_members(pl, keys) for pl in playlists]
+    print("Loading Wikidata genre index and artist genre statements...")
+    genre_items = load_genre_items(offline=args.offline)
+    names_by_item = genres_by_item(genre_ranks.keys(), genre_items)
+    artist_items = load_artist_genres([entry["id"] for entry in verified_catalog], offline=args.offline)
+    wikidata_genres = {aid: {g for q in (qids or []) for g in names_by_item.get(q, [])} for aid, qids in artist_items.items()}
+    tags = assign_tags(playlists, members, wikidata_genres, genre_ranks)
+    for entry in verified_catalog:
+        entry.update(tags.get(entry["id"], {"topSubgenres": [], "tagSource": "none", "wikidataGenres": [], "wikidataConfirmed": []}))
+    sources = Counter(entry["tagSource"] for entry in verified_catalog)
+    print(f"Genre tags: {dict(sources)} (Wikidata items matched to {sum(len(v) for v in names_by_item.values())} genres)")
 
     # Save output artifacts
     with open(CATALOG_FILE, "w", encoding="utf-8") as f:

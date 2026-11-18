@@ -1,16 +1,15 @@
 """
-Stage 4C: Louvain Topological Community Detection & Natural ForceAtlas2 Layout.
-Recreates the organic cosmic galaxy layout inspired by the Twitch Atlas and Commits 1 & 2:
-1. Topological Louvain Modularity Community Detection on weighted co-occurrence graph.
-2. Iterative Agglomerative Merging of satellite communities (< 35 artists) into adjacent
-   high-affinity major communities to yield <= 16 cohesive macro-continents.
-3. Smoothed TF-IDF Consensus Titles over member artists' subgenres with robust fallbacks.
-4. Stable LinLog ForceAtlas2 Physics:
-   - Pure LinLog attraction (linLogMode=True, strongGravityMode=False, gravity=0.35, scalingRatio=6.5)
-     Eliminates 1/d^2 repulsive singularity explosions, preventing any artists from being slingshotted into the void.
-5. Soft Optical Anti-Overlap Relaxation strictly for directly touching avatars (req = r1 + r2 + 1.0),
-   eliminating the artificial equidistant lattice and preserving natural organic clustering.
-6. Isotropic percentile normalization mapping the cohesive galaxy cleanly into [-1350.0, 1350.0].
+Stage 5: Louvain Continents, Final Genre Tags & Archipelago Layout.
+1. Topological Louvain Modularity Community Detection on the weighted co-occurrence graph.
+2. Communities above --max-community-size (350) are split by local Louvain; their slivers (< 25 artists) rejoin
+   the strongest sibling.
+3. Iterative Agglomerative Merging of the smallest community into its highest-affinity neighbour until there are
+   at most --target-continents (256) macro-continents and every one has >= 25 artists.
+4. Final genre tags: Stage 2's tags after the neighbour check (genre_tags.py), saved per artist in communities.json.
+   Continent titles: the 3 final tags with the best coverage in the continent relative to the whole atlas.
+5. Two-level archipelago layout (run_archipelago_layout): continent centroids by spring layout over inter-continent
+   affinity, subgenre micro-centroids within each continent, vectorized spring physics, percentile normalization
+   into the canvas bound, and soft clearance of overlapping avatars (req = r1 + r2 + 2.0).
 Outputs:
 - pipeline/output/communities.json
 - pipeline/output/layout_coordinates.json
@@ -21,15 +20,17 @@ import sys
 import json
 import time
 import math
-import random
 import colorsys
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Dict, List, Set, Tuple
 import numpy as np
 import networkx as nx
 from scipy.spatial import cKDTree
 from tqdm import tqdm
+
+from connections import neighbor_lists, drawn_pairs, strongest_drawn
+from genre_tags import check_with_neighbours, NEIGHBOUR_CHECK_K
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -45,8 +46,6 @@ CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 COMMUNITIES_FILE = os.path.join(OUTPUT_DIR, "communities.json")
 LAYOUT_FILE = os.path.join(OUTPUT_DIR, "layout_coordinates.json")
-PLAYLISTS_FILE = os.path.join(OUTPUT_DIR, "harvested_playlists.json")
-GENRES_FILE = os.path.join(OUTPUT_DIR, "everynoise_ranked_genres.json")
 
 CONTINENT_COLOR_SEED = 56
 
@@ -66,45 +65,23 @@ def get_continent_color(idx: int) -> str:
 
 
 
-def format_genre_name(name: str) -> str:
-    """Formats genre and acronym strings cleanly for display."""
-    if not name:
-        return ""
-    name = name.strip()
-    acronym_map = {
-        "r&b": "R&B",
-        "ccm": "CCM",
-        "edm": "EDM",
-        "k-pop": "K-Pop",
-        "j-pop": "J-Pop",
-        "j-rock": "J-Rock",
-        "ost": "OST",
-        "uk": "UK",
-        "idm": "IDM",
-        "opm": "OPM",
-        "mpb": "MPB",
-        "nz": "NZ",
-        "v-pop": "V-Pop"
-    }
-    parts = name.split()
-    return " ".join(acronym_map.get(p.lower(), p.title()) for p in parts)
-
 def run_archipelago_layout(
     G: nx.Graph,
     catalog_map: Dict[str, Dict],
     communities: List[Set[str]],
+    tags: Dict[str, List[str]],
     canvas_bound: float = 3200.0,
     num_iters: int = 180
 ) -> Dict[str, Tuple[float, float]]:
     """
     Two-Level Hierarchical Archipelago Layout with Subgenre Micro-Clustering:
     1. Level 1 (Macro Continents):
-       Computes inter-continent affinity across ~64 thematic territories and uses
-       spring layout to position continent centroids across a wide disc (radius ~2400).
+       Computes inter-continent affinity across all continents and uses spring layout
+       to position continent centroids across a wide disc (radius 0.7 x canvas_bound).
     2. Level 2 (Intra-Continent Subgenre Micro-Clusters):
-       Within each continent, groups artists by their primary subgenre. Positions distinct
-       micro-centroids spaced 120-350px around the continent centroid so Boom Bap, Trap,
-       and Emo Rap don't pancake on top of each other.
+       Within each continent, groups artists by their first final genre tag. Positions distinct
+       micro-centroids 65-225 units around the continent centroid so the continent's subgenres
+       don't pancake on top of each other. Artists without a genre tag stay at the continent centroid.
     3. Vectorized Multi-Body Physics:
        Intra-cluster spring forces pull collaborators together while centroid and micro-centroid
        anchors preserve island identity and separate subgenre peninsulas.
@@ -168,19 +145,17 @@ def run_archipelago_layout(
     for c_idx, comm in enumerate(communities):
         c_center = c_pos[c_idx]
         subg_members = {}
-        for u in comm:
-            subs = catalog_map.get(u, {}).get("topSubgenres", ["Other"])
-            p = subs[0] if subs else "Other"
-            subg_members.setdefault(p, []).append(u)
+        for u in sorted(comm):
+            node_target_centers[node_to_idx[u]] = c_center
+            if tags.get(u):
+                subg_members.setdefault(tags[u][0], []).append(u)
 
         num_subgs = len(subg_members)
-        if num_subgs == 1:
-            for u in comm:
-                node_target_centers[node_to_idx[u]] = c_center
+        if num_subgs <= 1:
             continue
 
         # Sort subgenres by size so major subgenres get dedicated outer orbits
-        sorted_subgs = sorted(subg_members.items(), key=lambda x: len(x[1]), reverse=True)
+        sorted_subgs = sorted(subg_members.items(), key=lambda x: (-len(x[1]), x[0]))
         subg_angles = np.linspace(0, 2 * np.pi, num_subgs, endpoint=False)
 
         for s_i, (subg, members) in enumerate(sorted_subgs):
@@ -278,7 +253,7 @@ def run_archipelago_layout(
     return {node: (round(float(pos[i, 0]), 2), round(float(pos[i, 1]), 2)) for i, node in enumerate(nodes)}
 
 def main():
-    parser = argparse.ArgumentParser(description="Stage 4C: Louvain Topological Continents & Archipelago Layout.")
+    parser = argparse.ArgumentParser(description="Stage 5: Louvain Topological Continents & Archipelago Layout.")
     parser.add_argument("--num-iters", type=int, default=300, help="Vectorized physics iterations (default: 300)")
     parser.add_argument("--canvas-bound", type=float, default=6400.0, help="Canvas coordinate half-width (default: 6400.0)")
     parser.add_argument("--target-continents", type=int, default=256, help="Target macro continents count (default: 256)")
@@ -290,7 +265,7 @@ def main():
         raise FileNotFoundError("Missing Stage 4 inputs. Run earlier pipeline stages first.")
 
     print("=" * 70)
-    print(f" STAGE 4C: {args.target_continents} LOUVAIN CONTINENTS & GALAXY ARCHIPELAGO PHYSICS")
+    print(f" STAGE 5: {args.target_continents} LOUVAIN CONTINENTS & GALAXY ARCHIPELAGO PHYSICS")
     print("=" * 70)
     start_time = time.time()
 
@@ -334,7 +309,11 @@ def main():
         if len(c) <= max_size:
             return [c]
 
-        subG = G.subgraph(c).copy()
+        # Built in sorted node order: a subgraph view iterates the set c, whose order changes between runs
+        members = sorted(c)
+        subG = nx.Graph()
+        subG.add_nodes_from(members)
+        subG.add_edges_from((u, v, d) for u in members for v, d in G[u].items() if v in c)
         sub_comms = [set(sc) for sc in nx.community.louvain_communities(subG, weight="weight", resolution=1.0, seed=42)]
 
         if len(sub_comms) <= 1:
@@ -348,7 +327,7 @@ def main():
 
         # Re-integrate slivers into strongest major sibling inside this subgraph
         for sliver in slivers:
-            for u in sliver:
+            for u in sorted(sliver):
                 best_target = max(major_parts, key=lambda p: sum(float(subG[u][v].get("weight", 0.1)) for v in subG.neighbors(u) if v in p))
                 best_target.add(u)
 
@@ -378,10 +357,11 @@ def main():
 
         best_target = None
         best_score = -1.0
+        small_members = sorted(c_small)  # fixed summation order, so ties resolve the same way every run
 
         for c_candidate in communities:
             w_sum = 0.0
-            for u in c_small:
+            for u in small_members:
                 for v in G.neighbors(u):
                     if v in c_candidate:
                         w_sum += float(G[u][v].get("weight", 0.1))
@@ -404,97 +384,27 @@ def main():
     communities = sorted(communities, key=len, reverse=True)
     print(f"Agglomerated into {len(communities)} macro-continents.")
 
-    # 2. Dual-Harmony Community-Affinity Subgenre Selection
-    # Uses topological continent membership to purge cross-genre crawler leaks (e.g. filmi on pop stars)
-    if os.path.exists(PLAYLISTS_FILE) and os.path.exists(GENRES_FILE):
-        print("Enriching artist subgenres via Dual-Harmony Community Coherence Network...")
-        with open(GENRES_FILE, "r", encoding="utf-8") as f:
-            genre_ranks_data = json.load(f)
-        genre_ranks = {
-            item["genre"].lower().strip(): item["rank"]
-            for item in genre_ranks_data
-            if "genre" in item and "rank" in item
-        }
-
-        with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
-            playlists_data = json.load(f)
-
-        name_to_aid = {}
-        for a in catalog:
-            aid = a["id"]
-            name_to_aid[a.get("name", "").lower().strip()] = aid
-            for s_name in a.get("scraped_names", []):
-                name_to_aid[s_name.lower().strip()] = aid
-
-        artist_to_comm_idx = {}
-        for c_idx, comm in enumerate(communities, start=1):
-            for a_id in comm:
-                artist_to_comm_idx[a_id] = c_idx
-
-        artist_genre_counts = defaultdict(Counter)
-        cont_genre_artists = defaultdict(lambda: defaultdict(set))
-
-        for pl in playlists_data:
-            g = pl.get("genre")
-            if not g:
-                continue
-            pl_aids = {
-                name_to_aid[t.get("artist_name", "").strip().lower()]
-                for t in pl.get("tracks", [])
-                if t.get("artist_name", "").strip().lower() in name_to_aid
-            }
-            for a_id in pl_aids:
-                artist_genre_counts[a_id][g] += 1
-                c_idx = artist_to_comm_idx.get(a_id)
-                if c_idx:
-                    cont_genre_artists[c_idx][g].add(a_id)
-
-        enriched_count = 0
-        for a_id, a_data in catalog_map.items():
-            g_counts = artist_genre_counts.get(a_id)
-            if not g_counts:
-                continue
-            c_idx = artist_to_comm_idx.get(a_id, 1)
-            scored = []
-            for g, cnt in g_counts.items():
-                if cnt < 2 and len(g_counts) > 2:
-                    continue
-                rank = genre_ranks.get(g.lower().strip(), 3500)
-                w_rank = 1.0 / ((70.0 + rank) ** 0.65)
-                comm_art = len(cont_genre_artists[c_idx].get(g, set()))
-                comm_fac = (comm_art / (comm_art + 15.0)) ** 0.5
-                score = (cnt ** 0.85) * w_rank * comm_fac
-                scored.append((score, cnt, g))
-
-            scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-            if scored:
-                a_data["topSubgenres"] = [format_genre_name(x[2]) for x in scored[:3]]
-                enriched_count += 1
-
-        with open(CATALOG_FILE, "w", encoding="utf-8") as f:
-            json.dump(catalog, f, indent=2)
-        print(f"Enriched {enriched_count} artists with community-coherent subgenres.")
+    # 2. Final genre tags: Stage 2's tags after the neighbour check (genre_tags.py), on the drawn connections Stage 6 exports.
+    # The catalog stays as Stage 2 wrote it, so re-running this stage gives the same tags.
+    members = {a for comm in communities for a in comm if a in catalog_map and (surviving_ids is None or a in surviving_ids)}
+    raw_neighbors = neighbor_lists(edges, members)
+    strongest = strongest_drawn(edges, drawn_pairs(edges, raw_neighbors, members), NEIGHBOUR_CHECK_K)
+    final_tags = check_with_neighbours({a: catalog_map[a] for a in members}, strongest)
+    dropped = sum(len(set(catalog_map[a]["topSubgenres"]) - set(final_tags[a])) for a in members)
+    from_wikidata = sum(1 for a in members if final_tags[a] and not set(final_tags[a]) & set(catalog_map[a]["topSubgenres"]))
+    print(f"Neighbour check dropped {dropped} tags; {from_wikidata} artists left without one took their Wikidata genres; "
+          f"{sum(1 for t in final_tags.values() if t)} of {len(members)} artists have a genre.")
 
     # 3. Consensus Titles via Intra-Community Member Majority Coverage & Contrastive Lift
     total_artists_in_graph = sum(len(c) for c in communities) or 1
-    global_subgenre_artist_count = Counter()
-    for a_id, a_data in catalog_map.items():
-        for g in a_data.get("topSubgenres", []):
-            global_subgenre_artist_count[g] += 1
+    global_subgenre_artist_count = Counter(g for tags in final_tags.values() for g in tags)
 
-    comm_genre_member_counts = []
-    for comm in communities:
-        g_comm_members = Counter()
-        for a_id in comm:
-            a_data = catalog_map.get(a_id, {})
-            for g in a_data.get("topSubgenres", []):
-                g_comm_members[g] += 1
-        comm_genre_member_counts.append(g_comm_members)
+    comm_genre_member_counts = [Counter(g for a_id in comm for g in final_tags.get(a_id, [])) for comm in communities]
 
     continents = []
     artist_continent_map = {}
 
-    for idx, (comm, g_member_counts) in enumerate(tqdm(zip(communities, comm_genre_member_counts), total=len(communities), desc="Stage 4C: Continents Consensus", unit="continent"), start=1):
+    for idx, (comm, g_member_counts) in enumerate(tqdm(zip(communities, comm_genre_member_counts), total=len(communities), desc="Stage 5: Continents Consensus", unit="continent"), start=1):
         color = get_continent_color(idx)
         comm_size = len(comm) or 1
 
@@ -505,20 +415,9 @@ def main():
             score = (coverage ** 0.8) * math.log(1.0 + (coverage / (global_cov + 0.02)))
             consensus_scores.append((score, count, g))
 
-        consensus_scores.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        top_genres = [format_genre_name(g[2]) for g in consensus_scores[:3]]
-
-        if top_genres:
-            title = " / ".join(top_genres)
-        else:
-            primary_counts = Counter(
-                catalog_map.get(a_id, {}).get("primaryGenre")
-                for a_id in comm if catalog_map.get(a_id, {}).get("primaryGenre")
-            )
-            if primary_counts:
-                title = format_genre_name(primary_counts.most_common(1)[0][0])
-            else:
-                title = f"Diverse Galaxy #{idx}"
+        consensus_scores.sort(key=lambda x: (-x[0], -x[1], x[2]))  # genre name breaks ties, so titles do not vary between runs
+        top_genres = [g[2] for g in consensus_scores[:3]]
+        title = " / ".join(top_genres) if top_genres else f"Diverse Galaxy #{idx}"
 
         sorted_members = sorted(list(comm))
         continents.append({
@@ -529,18 +428,14 @@ def main():
             "artistIds": sorted_members
         })
 
-        dominant_genre = top_genres[0] if top_genres else title
         for a_id in sorted_members:
-            raw_primary = catalog_map.get(a_id, {}).get("primaryGenre")
-            if not raw_primary or raw_primary == "Other":
-                raw_primary = dominant_genre
             artist_continent_map[a_id] = {
                 "continentId": idx,
                 "continentName": title,
                 "communityId": idx,
                 "communityName": title,
                 "color": color,
-                "primaryGenre": raw_primary
+                "topSubgenres": final_tags.get(a_id, [])
             }
 
     print("\nFormed Macro-Continents:")
@@ -555,12 +450,13 @@ def main():
         }, f, indent=2)
     print(f"\nSaved {COMMUNITIES_FILE}")
 
-    # 3. Two-Level Hierarchical Archipelago Layout Simulation
+    # 4. Two-Level Hierarchical Archipelago Layout Simulation
     print("\nStarting Spatial Layout Simulation...")
     coords = run_archipelago_layout(
         G,
         catalog_map,
         communities,
+        final_tags,
         canvas_bound=args.canvas_bound,
         num_iters=args.num_iters
     )
@@ -577,7 +473,7 @@ def main():
         json.dump(normalized_coords, f, indent=2)
 
     print(f"Saved {LAYOUT_FILE}")
-    print(f"Stage 4C complete in {time.time() - start_time:.2f}s!")
+    print(f"Stage 5 complete in {time.time() - start_time:.2f}s!")
     print("=" * 70)
 
 if __name__ == "__main__":

@@ -1,12 +1,14 @@
 """
-Stage 4B: Salton's Cosine Normalization, Dynamic Degree Bounding & GCC Bridging.
+Stage 4: Salton's Cosine Normalization, Dynamic Degree Bounding & GCC Bridging.
 Implements:
 1. Salton's Cosine Similarity: s_ij = c_ij / sqrt(c_i * c_j)
 2. Minimum weight cutoff (s_ij >= 0.08) & Superstar fluke filter (c_ij >= 2 if c_i >= 30)
-3. Evidence-Scaled Dynamic Degree Bounds: d_max(i) = min(28, max(4, floor(sqrt(c_i) * 4.5)))
+3. Evidence-Scaled Dynamic Degree Bounds: d_max(i) = min(24, max(4, floor(sqrt(c_i) * 4.0)))
 4. Rank protection (each artist keeps its top-4 neighbours) + global strongest-first fill
-5. Single Giant Component (GCC) Guarantee with Multi-Point Interstellar Bridges (k >= 3)
-   and semantic subgenre fallback to prevent isolated satellite dispersion
+   Supported-connection survival: an artist stays only if at least one of the connections it keeps rests on
+   >= 2 shared independent playlists (a neighbourhood of related playlists counts once)
+5. Single Giant Component (GCC) Guarantee: a satellite component of >= 3 artists gets up to 3 bridge edges along its
+   strongest co-occurrence links to the GCC; smaller satellites, and satellites with no such link, are dropped
 6. Outputs: pipeline/output/sparsified_edges.json and pipeline/output/surviving_artist_ids.json
 """
 
@@ -19,7 +21,7 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.csgraph import connected_components
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from typing import Set, Tuple
 from tqdm import tqdm
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -33,51 +35,31 @@ OUTPUT_DIR = os.path.join(PIPELINE_DIR, "output")
 
 C_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix.npz")
 C_RAW_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix_raw.npz")
+C_UNITS_FILE = os.path.join(OUTPUT_DIR, "cooccurrence_matrix_units.npz")
 INDEX_FILE = os.path.join(OUTPUT_DIR, "artist_index.json")
-CATALOG_FILE = os.path.join(OUTPUT_DIR, "artists_catalog.json")
 EDGES_FILE = os.path.join(OUTPUT_DIR, "sparsified_edges.json")
 SURVIVORS_FILE = os.path.join(OUTPUT_DIR, "surviving_artist_ids.json")
 
-NON_MUSICAL_AUDIO_TOKENS = {
-    "sound", "white noise", "sleep", "rain", "meditation", "asmr",
-    "pink noise", "nature sounds", "sound effects", "guided meditation",
-    "birdsong", "hypnosis", "ocean", "general"
-}
-
-def compute_semantic_subgenre_similarity(subg_a: List[str], subg_b: List[str]) -> float:
-    """Computes Jaccard/overlap similarity between two artists' subgenre vectors."""
-    if not subg_a or not subg_b:
-        return 0.0
-    set_a = {s.lower() for s in subg_a if s.lower() not in NON_MUSICAL_AUDIO_TOKENS}
-    set_b = {s.lower() for s in subg_b if s.lower() not in NON_MUSICAL_AUDIO_TOKENS}
-    inter = len(set_a.intersection(set_b))
-    union = len(set_a.union(set_b))
-    return inter / union if union > 0 else 0.0
+MIN_SHARED_INDEPENDENT_PLAYLISTS = 2
 
 def main():
-    if not os.path.exists(C_FILE) or not os.path.exists(INDEX_FILE) or not os.path.exists(CATALOG_FILE):
-        raise FileNotFoundError("Missing Stage 4A inputs. Run 03_build_cooccurrence.py first.")
+    if not all(os.path.exists(f) for f in (C_FILE, C_RAW_FILE, C_UNITS_FILE, INDEX_FILE)):
+        raise FileNotFoundError("Missing Stage 3 inputs. Run 03_build_cooccurrence.py first.")
 
     print("=" * 70)
-    print(" STAGE 4B: SALTON'S COSINE NORMALIZATION & EVIDENCE DEGREE BOUNDING")
+    print(" STAGE 4: SALTON'S COSINE NORMALIZATION & EVIDENCE DEGREE BOUNDING")
     print(" Dual Matrices: Damped weights for cosine & Raw integer counts for crossovers")
     print("=" * 70)
     start_time = time.time()
 
     C_damped = sp.load_npz(C_FILE).tocsr()
-    C_raw = sp.load_npz(C_RAW_FILE).tocsr() if os.path.exists(C_RAW_FILE) else C_damped.copy()
+    C_raw = sp.load_npz(C_RAW_FILE).tocsr()
 
     with open(INDEX_FILE, "r", encoding="utf-8") as f:
         meta = json.load(f)
-    with open(CATALOG_FILE, "r", encoding="utf-8") as f:
-        catalog = json.load(f)
 
     idx_to_artist = {int(k): v for k, v in meta["idx_to_artist"].items()}
-    artist_to_idx = {v: int(k) for k, v in meta["idx_to_artist"].items()}
     num_artists = meta["num_artists"]
-
-    artist_subgenres = {a["id"]: a.get("topSubgenres", ["Pop"]) for a in catalog}
-    artist_primary_genres = {a["id"]: a.get("primaryGenre", "Pop") for a in catalog}
 
     marginals_damped = C_damped.diagonal().copy()
     marginals_raw = C_raw.diagonal().copy()
@@ -89,7 +71,7 @@ def main():
     candidates = defaultdict(list)
     all_scored_edges = {}
 
-    for i in tqdm(range(num_artists), desc="Stage 4B: Cosine Normalization", unit="artist"):
+    for i in tqdm(range(num_artists), desc="Stage 4: Cosine Normalization", unit="artist"):
         c_i_damped = marginals_damped[i]
         c_i_raw = marginals_raw[i]
         if c_i_damped <= 0 or c_i_raw <= 0:
@@ -162,6 +144,16 @@ def main():
         if node_degree[i] < degree_bounds[i] and node_degree[j] < degree_bounds[j]:
             add_edge(i, j, sim, c_ij)
 
+    # C. Supported-connection survival: connections that all rest on a single independent playlist are no evidence
+    # of a relationship (stray credits, different artists under one name), so such an artist is not placed.
+    # Only the connections kept above count: an artist whose one corroborated pair is too weak to be kept (two
+    # playlists shared with a far larger artist) would be placed among single-playlist connections alone
+    pairs = np.array(sorted(final_edges))
+    shared_units = np.asarray(sp.load_npz(C_UNITS_FILE).tocsr()[pairs[:, 0], pairs[:, 1]]).ravel()
+    supported = set(pairs[shared_units >= MIN_SHARED_INDEPENDENT_PLAYLISTS].ravel().tolist())
+    final_edges = {e for e in final_edges if e[0] in supported and e[1] in supported}
+    print(f"Artists with a connection resting on >= {MIN_SHARED_INDEPENDENT_PLAYLISTS} shared independent playlists: {len(supported)} of {num_artists}")
+
     print(f"Edges before component bridging: {len(final_edges)}")
 
     # 3. Single Giant Connected Component (GCC) Guarantee & Multi-Point Interstellar Bridges
@@ -194,7 +186,7 @@ def main():
         if len(members) < 3:
             continue
 
-        # Rule: |S| >= 3, synthesize at least 3 interstellar bridge edges to closest semantic peers in GCC
+        # Rule: |S| >= 3, add up to 3 bridge edges along the satellite's strongest co-occurrence links into the GCC
         bridges_added = 0
         
         # Try candidate pairs in all_scored_edges first
@@ -213,34 +205,7 @@ def main():
             bridge_edges.add(pair)
             bridges_added += 1
 
-        # If fewer than 3 bridges found via co-occurrence, use subgenre semantic similarity fallback
-        if bridges_added < 3:
-            semantic_candidates = []
-            gcc_sample = list(gcc_nodes)
-            if len(gcc_sample) > 800:
-                step = max(1, len(gcc_sample) // 800)
-                gcc_sample = gcc_sample[::step][:800]
-            for u in members:
-                u_id = idx_to_artist[u]
-                u_subg = artist_subgenres.get(u_id, [])
-                for v in gcc_sample:
-                    v_id = idx_to_artist[v]
-                    v_subg = artist_subgenres.get(v_id, [])
-                    sem_sim = compute_semantic_subgenre_similarity(u_subg, v_subg)
-                    if sem_sim > 0:
-                        semantic_candidates.append((sem_sim, (min(u, v), max(u, v))))
-
-            semantic_candidates.sort(key=lambda x: x[0], reverse=True)
-            for sem_sim, pair in semantic_candidates:
-                if pair not in final_edges:
-                    final_edges.add(pair)
-                    edge_data_map[pair] = (0.12, 1)
-                    bridge_edges.add(pair)
-                    bridges_added += 1
-                    if bridges_added >= 3:
-                        break
-
-        # If bridges were added via co-occurrence or semantic similarity, incorporate members into surviving GCC
+        # If bridges were added via co-occurrence, incorporate members into surviving GCC
         if bridges_added > 0:
             surviving_nodes.update(members)
             gcc_nodes.update(members)
@@ -257,8 +222,9 @@ def main():
     print(f"Final connected component check over surviving nodes: {final_n_comp} component(s) (Target: 1).")
 
     # Format edges
-    min_sim = min(sim for sim, _ in edge_data_map.values()) if edge_data_map else 0.0
-    max_sim = max(sim for sim, _ in edge_data_map.values()) if edge_data_map else 1.0
+    final_sims = [edge_data_map[e][0] for e in final_edges]
+    min_sim = min(final_sims) if final_sims else 0.0
+    max_sim = max(final_sims) if final_sims else 1.0
     sim_range = (max_sim - min_sim) or 1.0
 
     formatted_edges = []
@@ -294,7 +260,7 @@ def main():
     with open(SURVIVORS_FILE, "w", encoding="utf-8") as f:
         json.dump(surviving_artist_ids, f, indent=2)
 
-    print(f"\nStage 4B complete in {time.time() - start_time:.2f}s!")
+    print(f"\nStage 4 complete in {time.time() - start_time:.2f}s!")
     print(f"Retained {len(formatted_edges)} high-signal sparsified edges across {len(surviving_artist_ids)} surviving artists.")
     print(f"Average node degree: {len(formatted_edges) * 2 / len(surviving_artist_ids):.2f}")
     print(f"Saved: {EDGES_FILE} and {SURVIVORS_FILE}")

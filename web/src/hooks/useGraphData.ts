@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { AtlasGraphBundle, AtlasNode, AtlasEdge, ArtistDetail } from '../types/atlas';
 import { continentColor } from '../utils/color';
 import { sanitizeAvatarUrl } from '../utils/imageUtils';
-import { filterValidSubgenres, findDuplicateArtistSlugs, parseContinentDetails } from '../utils/artistUtils';
+import { findDuplicateArtistSlugs, parseContinentDetails } from '../utils/artistUtils';
 import { GraphAdjacency, buildAdjacency } from '../utils/graphPath';
 import { slugify } from '../utils/genreUtils';
 import { IndexedNode, IndexedGenre, buildSearchIndex, buildGenreSearchIndex } from '../utils/searchEngine';
@@ -129,7 +129,7 @@ export function processAtlasGraphBundle(bundle: AtlasGraphBundle): ProcessedGrap
   // 6. Genre membership from EveryNoise subgenres, inheriting the subscriber ordering
   const genreMembers = new Map<string, number[]>();
   for (const idx of sortedGlobalIndices) {
-    for (const genre of filterValidSubgenres(bundle.nodes[idx].topSubgenres)) {
+    for (const genre of bundle.nodes[idx].topSubgenres) {
       const members = genreMembers.get(genre);
       if (members) members.push(idx);
       else genreMembers.set(genre, [idx]);

@@ -37,7 +37,8 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
         <p className="text-sm text-slate-300 leading-relaxed">
           Music Atlas is an attempt at visualizing the global music streaming landscape, gathering
           genres from EveryNoise and public YouTube Music user playlists, with artist information
-          from Deezer. The goal is to see common and similar artists that each user would listen to.
+          from Deezer and artist genres from Wikidata where its editors have recorded them. The goal is
+          to see common and similar artists that each user would listen to.
         </p>
 
         <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 flex flex-col gap-2.5 text-xs text-slate-300">

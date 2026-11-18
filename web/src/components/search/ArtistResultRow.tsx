@@ -1,6 +1,5 @@
 import React from 'react';
 import { AtlasNode } from '../../types/atlas';
-import { filterValidSubgenres } from '../../utils/artistUtils';
 
 interface ArtistResultRowProps {
   artist: AtlasNode;
@@ -9,23 +8,9 @@ interface ArtistResultRowProps {
   onHover: () => void;
 }
 
-function formatGenreDisplay(artist: AtlasNode): string {
-  const firstSubgenre = filterValidSubgenres(artist.topSubgenres)[0] || '';
-  const rawPrimary = artist.primaryGenre ? artist.primaryGenre.trim() : '';
-  const hasPrimary = Boolean(
-    rawPrimary &&
-      !['other', 'artist', 'unknown', 'eclectic'].includes(rawPrimary.toLowerCase()) &&
-      (!firstSubgenre || rawPrimary.toLowerCase() !== firstSubgenre.toLowerCase())
-  );
-
-  if (hasPrimary && firstSubgenre) return `${rawPrimary} • ${firstSubgenre}`;
-  if (hasPrimary) return rawPrimary;
-  return firstSubgenre;
-}
-
 /** Autocomplete row: avatar ringed in the artist's continent colour, name and genre. */
 export const ArtistResultRow: React.FC<ArtistResultRowProps> = ({ artist, isActive, onPick, onHover }) => {
-  const genreDisplay = formatGenreDisplay(artist);
+  const genreDisplay = artist.topSubgenres[0] || '';
 
   return (
     <button

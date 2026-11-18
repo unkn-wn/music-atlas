@@ -5,7 +5,6 @@ export interface IndexedNode {
   normLabel: string;
   firstWord: string;
   words: string[];
-  normPrimary: string;
   normSubgenres: string[];
   normContinent: string;
   subscribers: number;
@@ -36,10 +35,6 @@ export function buildSearchIndex(nodes: AtlasNode[]): IndexedNode[] {
     const n = nodes[i];
     const normLabel = normalizeSearchText(n.label || '');
     const words = normLabel ? normLabel.split(/[\s\-_–—,.'"/]+/).filter(Boolean) : [];
-    const rawPrimary = normalizeSearchText(n.primaryGenre || '');
-    const normPrimary = !['other', 'artist', 'unknown', 'eclectic'].includes(rawPrimary)
-      ? rawPrimary
-      : '';
     const normSubgenres = (n.topSubgenres || [])
       .map((g) => normalizeSearchText(g || ''))
       .filter(Boolean);
@@ -50,7 +45,6 @@ export function buildSearchIndex(nodes: AtlasNode[]): IndexedNode[] {
       normLabel,
       firstWord: words[0] || '',
       words,
-      normPrimary,
       normSubgenres,
       normContinent,
       subscribers: n.subscribers || 0
@@ -92,7 +86,7 @@ export function searchArtists(
 
   for (let i = 0; i < indexedNodes.length; i++) {
     const item = indexedNodes[i];
-    const { normLabel, firstWord, words, normPrimary, normSubgenres, normContinent } = item;
+    const { normLabel, firstWord, words, normSubgenres, normContinent } = item;
 
     // Fast-reject check: if the label contains the query, test artist name match tiers
     const hasSubstring = normLabel.includes(qNorm);
@@ -131,7 +125,7 @@ export function searchArtists(
 
     // Secondary: Genre or Continent matches (only when query length > 2)
     if (qNorm.length > 2) {
-      if (normPrimary.includes(qNorm) || normContinent.includes(qNorm)) {
+      if (normContinent.includes(qNorm)) {
         genreMatches.push(item.node);
       } else {
         for (let g = 0; g < normSubgenres.length; g++) {

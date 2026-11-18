@@ -150,7 +150,6 @@ export const AtlasCanvas = React.memo(
             shape: 0, // 0 = Circle
             color: node.color,
             continentId: node.continentId,
-            primaryGenre: node.primaryGenre,
             subscribers: node.subscribers
           };
         });

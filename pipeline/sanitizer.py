@@ -99,6 +99,11 @@ def split_artist_names(raw_name: Optional[str]) -> List[str]:
 
     return artists
 
+def song_key(title: str) -> str:
+    """Song title without bracketed notes or featured artists, for matching uploads against official releases."""
+    title = re.split(r"\s*[\(\[【]|\s+(?:ft\.?|feat\.?)\s+", title, maxsplit=1, flags=re.I)[0]
+    return unicodedata.normalize("NFKC", title).strip().lower()
+
 def is_valid_artist(raw_name: Optional[str]) -> bool:
     """Returns True if raw_name is a valid artist name."""
     return sanitize_artist_name(raw_name) is not None
